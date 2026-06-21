@@ -148,5 +148,4 @@ model weights are out of scope by definition).
 
 ## License
 
-TBD — MIT or Apache-2.0 recommended for dev-led adoption. Add a `LICENSE` file
-before publishing.
+[Apache-2.0](LICENSE) — permissive, with an explicit patent grant.
