@@ -18,6 +18,17 @@ sends it to the vector store or the database.
     )
     store.add_documents([Document(page_content="...",
                                   metadata={"user_id": "alice@example.com"})])
+
+Assumptions & limits (be aware before relying on completeness):
+  * Id ordering — tagging maps returned ids to inputs *positionally*, relying on
+    the LangChain contract that add_documents/add_texts return ids in input
+    order, one per input. A store that reorders or dedups ids would mistag.
+  * Construction methods — ``from_documents`` / ``from_texts`` are classmethods
+    on the underlying store and bypass this wrapper entirely; build through the
+    wrapper (or tag manually) rather than wrapping an already-populated store.
+  * Unknown writes — known un-taggable write verbs are refused (fail-closed). A
+    brand-new write surface not yet in the deny-list is the one residual leak;
+    add it to ``_UNTAGGABLE_WRITES`` or override it.
 """
 
 
@@ -97,8 +108,52 @@ class LetheVectorStore:
         self._tag(metadatas, ids)
         return ids
 
+    # --- async write surfaces -----------------------------------------------
+    # LangChain vector stores expose async writes; without explicit overrides
+    # these would fall through __getattr__ to the inner store and write data
+    # that is never tagged -> silently undeletable. Mirror the sync paths.
+    async def aadd_documents(self, documents, **kwargs):
+        metadatas = [getattr(d, "metadata", {}) or {} for d in documents]
+        if self.on_missing_subject == "error":
+            self._require_subjects(metadatas)  # pre-write: no untaggable writes
+        ids = await self.inner.aadd_documents(documents, **kwargs)
+        self._tag(metadatas, ids)
+        return ids
+
+    async def aadd_texts(self, texts, metadatas=None, **kwargs):
+        texts = list(texts)
+        metadatas = list(metadatas) if metadatas is not None else [{} for _ in texts]
+        if self.on_missing_subject == "error":
+            self._require_subjects(metadatas)
+        ids = await self.inner.aadd_texts(texts, metadatas=metadatas, **kwargs)
+        self._tag(metadatas, ids)
+        return ids
+
+    # Write methods the wrapper cannot safely tag. Proxying them would leak
+    # untaggable (silently undeletable) data into the inner store, so we refuse
+    # rather than fail open. This is a deny-list because new write surfaces are
+    # the catastrophic case for a deletion product; read methods proxy freely.
+    _UNTAGGABLE_WRITES = frozenset(
+        {
+            "add_embeddings",
+            "aadd_embeddings",
+            "upsert",
+            "aupsert",
+            "from_documents",
+            "afrom_documents",
+            "from_texts",
+            "afrom_texts",
+        }
+    )
+
     # --- transparent proxy for everything else ------------------------------
     def __getattr__(self, name):
+        if name in type(self)._UNTAGGABLE_WRITES:
+            raise LetheTaggingError(
+                f"{name!r} writes to the store but Lethe cannot tag those records "
+                f"for deletion. Use add_documents/add_texts (or their async forms), "
+                f"or tag explicitly via lethe.tag() and call inner.{name} yourself."
+            )
         inner = self.__dict__.get("inner")
         if inner is None:
             raise AttributeError(name)
