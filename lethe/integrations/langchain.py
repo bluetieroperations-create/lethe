@@ -90,6 +90,7 @@ class LetheVectorStore:
 
     def _ids_from_metadata(self, metadatas: list[dict]) -> list[str]:
         ids = []
+        seen: dict[str, int] = {}
         for i, m in enumerate(metadatas):
             rid = (m or {}).get(self.id_key)
             if rid is None:
@@ -97,7 +98,23 @@ class LetheVectorStore:
                     f"document {i} is missing id_key '{self.id_key}' in metadata; "
                     f"cannot bind a stable id for tagging/deletion."
                 )
-            ids.append(str(rid))
+            rid = str(rid)
+            if rid in seen:
+                # An id-keyed store treats id as a primary key, so a repeated id
+                # in one batch upserts: the later record overwrites the earlier
+                # one in the store, but the ledger would tag BOTH inputs to that
+                # single surviving row. If the two inputs belong to different
+                # subjects, one subject's forget() would then delete the other
+                # subject's data. Fail closed before any write, like the
+                # multi-subject rejection in _subject_of.
+                raise LetheTaggingError(
+                    f"duplicate id_key '{self.id_key}'={rid!r} at documents "
+                    f"{seen[rid]} and {i}; ids must be unique within a batch so "
+                    f"each record maps to exactly one subject. Deduplicate inputs "
+                    f"or give each record a distinct id."
+                )
+            seen[rid] = i
+            ids.append(rid)
         return ids
 
     def _prepare(self, metadatas: list[dict], kwargs: dict) -> list[str] | None:

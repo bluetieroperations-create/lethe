@@ -350,3 +350,84 @@ def test_id_key_end_to_end_forget_with_reordering_store(conn):
         remaining = [r[0] for r in cur.fetchall()]
     assert remaining == ["bob secret"]  # exactly alice's row removed
     assert cert.payload["records_deleted"] == 1
+
+
+# --- C-1: duplicate id_key in a batch -> cross-subject collateral deletion ----
+
+
+class UpsertInner(PgInner):
+    """id-keyed store: the caller-provided id is a primary key, so a repeated id
+    UPSERTS (the later record overwrites the earlier one). Pinecone /
+    pgvector-with-ids semantics. A naive wrapper would tag two inputs to the one
+    surviving row, so forgetting one subject deletes the other's data."""
+
+    def add_documents(self, documents, ids=None, **kwargs):
+        used = ids if ids is not None else [f"a{i}" for i in range(len(documents))]
+        with self.conn.cursor() as cur:
+            for d, rid in zip(documents, used):
+                cur.execute(
+                    f"INSERT INTO {self.table} (id, body) VALUES (%s,%s) "
+                    f"ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body",
+                    (rid, d.page_content),
+                )
+        self.conn.commit()
+        return list(used)
+
+    async def aadd_documents(self, documents, ids=None, **kwargs):
+        return self.add_documents(documents, ids=ids, **kwargs)
+
+
+def test_id_key_duplicate_across_subjects_refused_before_write(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        UpsertInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    # Two DIFFERENT subjects share one doc_id. If allowed, the store upserts to a
+    # single row tagged to both, and alice.forget() destroys bob's data.
+    with pytest.raises(LetheTaggingError):
+        store.add_documents([
+            Doc("alice secret", {"user_id": "alice", "doc_id": "dup"}),
+            Doc("bob secret", {"user_id": "bob", "doc_id": "dup"}),
+        ])
+    assert inner_count(conn) == 0  # nothing written
+    assert lethe.ledger.lookup(lethe._subject_hash("alice")) == []
+    assert lethe.ledger.lookup(lethe._subject_hash("bob")) == []
+
+
+def test_id_key_duplicate_same_subject_refused(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        UpsertInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    # Same subject, same id on two distinct docs: upsert would silently lose one.
+    with pytest.raises(LetheTaggingError):
+        store.add_documents([
+            Doc("first", {"user_id": "alice", "doc_id": "x"}),
+            Doc("second", {"user_id": "alice", "doc_id": "x"}),
+        ])
+    assert inner_count(conn) == 0
+
+
+def test_id_key_async_duplicate_refused(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        UpsertInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    with pytest.raises(LetheTaggingError):
+        asyncio.run(store.aadd_documents([
+            Doc("alice", {"user_id": "alice", "doc_id": "dup"}),
+            Doc("bob", {"user_id": "bob", "doc_id": "dup"}),
+        ]))
+    assert inner_count(conn) == 0
+
+
+def inner_count(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM wrapped_vectors")
+        return cur.fetchone()[0]
