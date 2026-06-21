@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 
 import psycopg
@@ -47,7 +48,18 @@ class AuditLog:
         self.conn.commit()
         return h
 
-    def verify_chain(self) -> bool:
+    def verify_chain(self, expected_head: str | None = None) -> bool:
+        """Verify the hash chain links from genesis to the current tip.
+
+        SECURITY: an internal walk proves no entry was *altered* or removed from
+        the *middle* (that breaks a prev_hash link), but it CANNOT detect tip
+        truncation — deleting the most recent entries leaves a self-consistent,
+        merely shorter chain. To catch an attacker lopping off the tail (erasing
+        evidence of recent erasures), the operator must record the head hash
+        out-of-band and pass it as ``expected_head`` — the same pin-it-externally
+        discipline the certificate uses for the trusted public key. With no
+        entries the head is ``GENESIS``.
+        """
         with self.conn.cursor() as cur:
             cur.execute(
                 "SELECT entry, prev_hash, entry_hash FROM lethe_audit ORDER BY seq ASC"
@@ -60,4 +72,6 @@ class AuditLog:
             if _entry_hash(prev_hash, entry) != entry_hash:
                 return False
             prev = entry_hash
+        if expected_head is not None and not hmac.compare_digest(prev, expected_head):
+            return False
         return True

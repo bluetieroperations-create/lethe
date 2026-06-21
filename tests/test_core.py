@@ -63,9 +63,15 @@ def test_forget_writes_audit_entry_and_purges_ledger(setup):
     assert any(e["request_id"] == "req-1" for e in entries)
 
 
-def test_forget_unknown_subject_is_empty_but_valid(setup):
+def test_forget_unknown_subject_is_empty_and_not_certified_as_erasure(setup):
     conn, lethe = setup
     cert = lethe.forget("nobody", request_id="req-x")
     assert cert.payload["layers"] == []
-    assert cert.payload["all_verified"] is True
+    # Nothing was found, so the certificate must NOT claim a verified erasure.
+    # all([]) == True would otherwise let "found nothing" read as "deleted
+    # everything" — a false certification (it-auditor C-1/H-2).
+    assert cert.payload["all_verified"] is False
+    assert cert.payload["layers_found"] == 0
+    assert cert.payload["records_deleted"] == 0
+    # The signed certificate itself is still internally valid and verifiable.
     assert verify_certificate(cert) is True

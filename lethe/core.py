@@ -58,10 +58,36 @@ class Lethe:
 
         layers: list[LayerResult] = []
         for (store, namespace), ids in groups.items():
-            connector = self.connectors[store]
+            connector = self.connectors.get(store)
+            if connector is None:
+                # A tagged store with no configured connector must NOT crash the
+                # loop mid-flight (that would leave already-deleted layers with no
+                # certificate). Record it as an unhandled, unverified layer so the
+                # certificate is honest and the ledger is preserved for retry once
+                # the connector is configured.
+                layers.append(
+                    LayerResult(
+                        store,
+                        namespace,
+                        deleted_count=0,
+                        verified_absent=False,
+                        requested_count=len(ids),
+                        handled=False,
+                    )
+                )
+                continue
             deleted = connector.delete(namespace, ids)
             verified = connector.verify(namespace, ids)
-            layers.append(LayerResult(store, namespace, deleted, verified))
+            layers.append(
+                LayerResult(
+                    store,
+                    namespace,
+                    deleted_count=deleted,
+                    verified_absent=verified,
+                    requested_count=len(ids),
+                    handled=True,
+                )
+            )
 
         cert = build_certificate(
             request_id=request_id,

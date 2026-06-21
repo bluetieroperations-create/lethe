@@ -27,21 +27,47 @@ def build_certificate(
     signer: Signer,
 ) -> Certificate:
     ordered = sorted(layers, key=lambda l: (l.store, l.namespace))
+
+    def _is_erasure(l: LayerResult) -> bool:
+        # A layer is a genuine, certifiable erasure only when Lethe was handled
+        # by a real connector, confirmed the records absent, AND actually removed
+        # records this run. deleted_count 0 with verified_absent True means the
+        # data was already gone (another subject's forget, or a prior partial
+        # run) — Lethe did NOT perform this erasure and must not certify it.
+        return l.handled and l.verified_absent and l.deleted_count > 0
+
+    erasures = [_is_erasure(l) for l in ordered]
+
+    # all_verified is the load-bearing claim a regulator relies on. It is True
+    # ONLY if at least one layer was found AND every layer is a genuine erasure.
+    # Empty layers (unknown subject / nothing found) => all([]) would be True;
+    # we require a non-empty layer set so "found nothing" can never read as a
+    # successful, verified erasure.
+    all_verified = bool(ordered) and all(erasures)
+
     payload = {
         "request_id": request_id,
         "subject_hash": subject_hash,
         "issued_at": issued_at,
         "lethe_version": version,
         "claim": CLAIM,
-        "all_verified": all(l.verified_absent for l in ordered),
+        "all_verified": all_verified,
+        # Honest summary of what actually happened, so a zero-deletion or
+        # unhandled-store outcome cannot be misread off the layer list.
+        "layers_found": len(ordered),
+        "records_deleted": sum(l.deleted_count for l in ordered),
+        "all_layers_handled": all(l.handled for l in ordered) if ordered else True,
         "layers": [
             {
                 "store": l.store,
                 "namespace": l.namespace,
                 "deleted_count": l.deleted_count,
                 "verified_absent": l.verified_absent,
+                "requested_count": l.requested_count,
+                "handled": l.handled,
+                "erased": erased,
             }
-            for l in ordered
+            for l, erased in zip(ordered, erasures)
         ],
     }
     data = _canonical_bytes(payload)
