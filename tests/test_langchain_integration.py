@@ -250,3 +250,103 @@ def test_end_to_end_wrap_then_forget(wired):
     assert remaining == ["bob secret"]
     assert cert.payload["all_verified"] is True
     assert cert.payload["records_deleted"] == 1
+
+
+# --- M-1: id_key binds ids from metadata, not the store's return order --------
+
+
+def _make_lethe(conn):
+    ledger = Ledger(conn)
+    ledger.init_schema()
+    audit = AuditLog(conn)
+    audit.init_schema()
+    return Lethe(
+        ledger=ledger,
+        audit=audit,
+        signer=Signer.generate(),
+        connectors={"pgvector": PgVectorConnector(conn)},
+        salt="s",
+    )
+
+
+def _make_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS wrapped_vectors")
+        cur.execute("CREATE TABLE wrapped_vectors (id TEXT PRIMARY KEY, body TEXT)")
+    conn.commit()
+
+
+class ReorderingInner(PgInner):
+    """Honors caller-provided ids but RETURNS them reversed — the exact
+    misbehavior that makes positional tagging unsafe (M-1)."""
+
+    def add_documents(self, documents, ids=None, **kwargs):
+        used = ids if ids is not None else [f"auto{i}" for i in range(len(documents))]
+        with self.conn.cursor() as cur:
+            for d, rid in zip(documents, used):
+                cur.execute(
+                    f"INSERT INTO {self.table} (id, body) VALUES (%s, %s)",
+                    (rid, d.page_content),
+                )
+        self.conn.commit()
+        return list(reversed(used))
+
+
+def test_id_key_binds_ids_from_metadata_despite_reordered_return(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        ReorderingInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    store.add_documents([
+        Doc("alice", {"user_id": "alice", "doc_id": "da"}),
+        Doc("bob", {"user_id": "bob", "doc_id": "db"}),
+    ])
+    # The store returned ids reversed; positional tagging would have swapped
+    # them. id_key binds each subject to ITS OWN id from metadata.
+    assert {t.record_id for t in lethe.ledger.lookup(lethe._subject_hash("alice"))} == {"da"}
+    assert {t.record_id for t in lethe.ledger.lookup(lethe._subject_hash("bob"))} == {"db"}
+
+
+def test_id_key_missing_in_metadata_raises_before_write(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    inner = PgInner(conn, "wrapped_vectors")
+    store = LetheVectorStore(
+        inner, lethe, store="pgvector", namespace="wrapped_vectors",
+        subject_key="user_id", id_key="doc_id",
+    )
+    with pytest.raises(LetheTaggingError):
+        store.add_documents([Doc("a", {"user_id": "alice"})])  # no doc_id
+    assert inner.count() == 0
+
+
+def test_id_key_conflicts_with_explicit_ids_kwarg(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        PgInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    with pytest.raises(ValueError):
+        store.add_documents([Doc("a", {"user_id": "alice", "doc_id": "da"})], ids=["x"])
+
+
+def test_id_key_end_to_end_forget_with_reordering_store(conn):
+    _make_table(conn)
+    lethe = _make_lethe(conn)
+    store = LetheVectorStore(
+        ReorderingInner(conn, "wrapped_vectors"), lethe, store="pgvector",
+        namespace="wrapped_vectors", subject_key="user_id", id_key="doc_id",
+    )
+    store.add_documents([
+        Doc("alice secret", {"user_id": "alice", "doc_id": "da"}),
+        Doc("bob secret", {"user_id": "bob", "doc_id": "db"}),
+    ])
+    cert = lethe.forget("alice")
+    with conn.cursor() as cur:
+        cur.execute("SELECT body FROM wrapped_vectors ORDER BY id")
+        remaining = [r[0] for r in cur.fetchall()]
+    assert remaining == ["bob secret"]  # exactly alice's row removed
+    assert cert.payload["records_deleted"] == 1

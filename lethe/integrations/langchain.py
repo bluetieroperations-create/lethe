@@ -15,20 +15,28 @@ sends it to the vector store or the database.
         store="pgvector",             # must match a connector key in Lethe
         namespace="my_table",         # must match where the records live
         subject_key="user_id",        # metadata field naming the data subject
+        id_key="doc_id",              # OPTIONAL: metadata field holding a stable id
     )
     store.add_documents([Document(page_content="...",
                                   metadata={"user_id": "alice@example.com"})])
 
-Assumptions & limits (be aware before relying on completeness):
-  * Id ordering — tagging maps returned ids to inputs *positionally*, relying on
-    the LangChain contract that add_documents/add_texts return ids in input
-    order, one per input. A store that reorders or dedups ids would mistag.
-  * Construction methods — ``from_documents`` / ``from_texts`` are classmethods
-    on the underlying store and bypass this wrapper entirely; build through the
-    wrapper (or tag manually) rather than wrapping an already-populated store.
-  * Unknown writes — known un-taggable write verbs are refused (fail-closed). A
-    brand-new write surface not yet in the deny-list is the one residual leak;
-    add it to ``_UNTAGGABLE_WRITES`` or override it.
+Id binding (resolves the M-1 reordering risk):
+  * With ``id_key`` set (RECOMMENDED for production), each record's id is read
+    from ``metadata[id_key]`` and passed to the store, so tagging is bound to
+    the record directly and never depends on the store returning ids in input
+    order. Required-style for id-keyed stores like Pinecone.
+  * Without ``id_key``, tagging maps the store's returned ids to inputs
+    positionally, relying on the LangChain contract that add_documents/add_texts
+    return ids in input order, one per input. A reordering store would mistag —
+    use ``id_key`` if you can't rely on that contract.
+
+Other limits:
+  * ``from_documents`` / ``from_texts`` are classmethods on the underlying store
+    and bypass this wrapper entirely; build through the wrapper (or tag
+    manually) rather than wrapping an already-populated store.
+  * Known un-taggable write verbs are refused (fail-closed). A brand-new write
+    surface not yet in the deny-list is the one residual leak; add it to
+    ``_UNTAGGABLE_WRITES`` or override it.
 """
 
 
@@ -45,6 +53,7 @@ class LetheVectorStore:
         store: str,
         namespace: str,
         subject_key: str,
+        id_key: str | None = None,
         on_missing_subject: str = "error",
     ):
         if on_missing_subject not in ("error", "skip"):
@@ -54,6 +63,7 @@ class LetheVectorStore:
         self.store = store
         self.namespace = namespace
         self.subject_key = subject_key
+        self.id_key = id_key
         self.on_missing_subject = on_missing_subject
 
     # --- subject extraction -------------------------------------------------
@@ -78,6 +88,33 @@ class LetheVectorStore:
                 f"be deleted. Add the subject, or use on_missing_subject='skip'."
             )
 
+    def _ids_from_metadata(self, metadatas: list[dict]) -> list[str]:
+        ids = []
+        for i, m in enumerate(metadatas):
+            rid = (m or {}).get(self.id_key)
+            if rid is None:
+                raise LetheTaggingError(
+                    f"document {i} is missing id_key '{self.id_key}' in metadata; "
+                    f"cannot bind a stable id for tagging/deletion."
+                )
+            ids.append(str(rid))
+        return ids
+
+    def _prepare(self, metadatas: list[dict], kwargs: dict) -> list[str] | None:
+        """Validate subjects (no untaggable writes in error mode); if id_key is
+        set, derive each record's id from metadata so tagging never relies on the
+        store returning ids in input order. Returns explicit ids or None."""
+        if self.on_missing_subject == "error":
+            self._require_subjects(metadatas)
+        if self.id_key is not None:
+            if "ids" in kwargs:
+                raise ValueError(
+                    "when id_key is set, record ids come from metadata[id_key]; "
+                    "do not also pass an ids= argument."
+                )
+            return self._ids_from_metadata(metadatas)
+        return None
+
     def _tag(self, metadatas: list[dict], ids) -> None:
         if ids is None or len(ids) != len(metadatas):
             raise LetheTaggingError(
@@ -93,8 +130,11 @@ class LetheVectorStore:
     # --- write surfaces -----------------------------------------------------
     def add_documents(self, documents, **kwargs):
         metadatas = [getattr(d, "metadata", {}) or {} for d in documents]
-        if self.on_missing_subject == "error":
-            self._require_subjects(metadatas)  # pre-write: no untaggable writes
+        explicit = self._prepare(metadatas, kwargs)
+        if explicit is not None:
+            self.inner.add_documents(documents, ids=explicit, **kwargs)
+            self._tag(metadatas, explicit)
+            return explicit
         ids = self.inner.add_documents(documents, **kwargs)
         self._tag(metadatas, ids)
         return ids
@@ -102,8 +142,11 @@ class LetheVectorStore:
     def add_texts(self, texts, metadatas=None, **kwargs):
         texts = list(texts)
         metadatas = list(metadatas) if metadatas is not None else [{} for _ in texts]
-        if self.on_missing_subject == "error":
-            self._require_subjects(metadatas)
+        explicit = self._prepare(metadatas, kwargs)
+        if explicit is not None:
+            self.inner.add_texts(texts, metadatas=metadatas, ids=explicit, **kwargs)
+            self._tag(metadatas, explicit)
+            return explicit
         ids = self.inner.add_texts(texts, metadatas=metadatas, **kwargs)
         self._tag(metadatas, ids)
         return ids
@@ -114,8 +157,11 @@ class LetheVectorStore:
     # that is never tagged -> silently undeletable. Mirror the sync paths.
     async def aadd_documents(self, documents, **kwargs):
         metadatas = [getattr(d, "metadata", {}) or {} for d in documents]
-        if self.on_missing_subject == "error":
-            self._require_subjects(metadatas)  # pre-write: no untaggable writes
+        explicit = self._prepare(metadatas, kwargs)
+        if explicit is not None:
+            await self.inner.aadd_documents(documents, ids=explicit, **kwargs)
+            self._tag(metadatas, explicit)
+            return explicit
         ids = await self.inner.aadd_documents(documents, **kwargs)
         self._tag(metadatas, ids)
         return ids
@@ -123,8 +169,11 @@ class LetheVectorStore:
     async def aadd_texts(self, texts, metadatas=None, **kwargs):
         texts = list(texts)
         metadatas = list(metadatas) if metadatas is not None else [{} for _ in texts]
-        if self.on_missing_subject == "error":
-            self._require_subjects(metadatas)
+        explicit = self._prepare(metadatas, kwargs)
+        if explicit is not None:
+            await self.inner.aadd_texts(texts, metadatas=metadatas, ids=explicit, **kwargs)
+            self._tag(metadatas, explicit)
+            return explicit
         ids = await self.inner.aadd_texts(texts, metadatas=metadatas, **kwargs)
         self._tag(metadatas, ids)
         return ids
