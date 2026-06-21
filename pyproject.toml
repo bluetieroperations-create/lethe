@@ -1,0 +1,19 @@
+[project]
+name = "lethe"
+version = "0.1.0"
+description = "The forget button for AI — provable data-subject deletion for AI memory."
+requires-python = ">=3.11"
+dependencies = ["psycopg[binary]>=3.1", "cryptography>=42", "click>=8.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lethe = "lethe.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["lethe*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
