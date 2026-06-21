@@ -35,6 +35,32 @@ def _poll(fn, want, timeout=60.0, every=2.0):
     return val
 
 
+def _index_names(pc):
+    """List index names across client versions (.names() or iterable of models/dicts)."""
+    idx = pc.list_indexes()
+    names = getattr(idx, "names", None)
+    if callable(names):
+        return list(idx.names())
+    out = []
+    for i in idx:
+        out.append(i.get("name") if isinstance(i, dict) else getattr(i, "name", None))
+    return [n for n in out if n]
+
+
+def _ready(pc, name) -> bool:
+    """Read describe_index(...).status.ready across attribute/dict shapes."""
+    desc = pc.describe_index(name)
+    status = getattr(desc, "status", None)
+    if status is None and isinstance(desc, dict):
+        status = desc.get("status")
+    if status is None:
+        return False
+    ready = getattr(status, "ready", None)
+    if ready is None and isinstance(status, dict):
+        ready = status.get("ready")
+    return bool(ready)
+
+
 def main() -> int:
     key = os.environ.get("PINECONE_API_KEY")
     if not key:
@@ -51,7 +77,7 @@ def main() -> int:
     pc = Pinecone(api_key=key)
     name = "lethe-e2e-throwaway"
 
-    if name in [i["name"] for i in pc.list_indexes()]:
+    if name in _index_names(pc):
         pc.delete_index(name)
 
     print(f"creating throwaway index {name!r} ...")
@@ -61,8 +87,8 @@ def main() -> int:
         metric="cosine",
         spec=ServerlessSpec(cloud="aws", region="us-east-1"),
     )
-    # wait for the index to be ready
-    _poll(lambda: pc.describe_index(name)["status"]["ready"], True, timeout=120)
+    # wait for the index to be ready (status shape varies across client versions)
+    _poll(lambda: _ready(pc, name), True, timeout=120)
 
     index = pc.Index(name)
     conn = PineconeConnector(index)
