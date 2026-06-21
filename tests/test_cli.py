@@ -88,3 +88,40 @@ def test_verify_rejects_tampered_certificate(tmp_path):
     r = runner.invoke(cli, ["verify", str(cert_file), "--public-key", pub])
     assert r.exit_code == 1
     assert "INVALID" in r.output
+
+
+def test_audit_head_and_verify_audit_detect_truncation(conn):
+    if not DATABASE_URL:
+        import pytest
+
+        pytest.skip("needs LETHE_TEST_DATABASE_URL")
+    from lethe.audit import AuditLog
+
+    runner = CliRunner()
+    assert runner.invoke(cli, ["init-db", "--database-url", DATABASE_URL]).exit_code == 0
+
+    log = AuditLog(conn)
+    log.append({"event": "forget", "request_id": "a1"})
+    log.append({"event": "forget", "request_id": "a2"})
+
+    # audit-head prints the current recorded tip.
+    r = runner.invoke(cli, ["audit-head", "--database-url", DATABASE_URL])
+    assert r.exit_code == 0
+    head = r.output.strip()
+
+    # Pinned to the real head -> VALID.
+    r = runner.invoke(
+        cli, ["verify-audit", "--database-url", DATABASE_URL, "--expected-head", head]
+    )
+    assert r.exit_code == 0
+    assert "VALID" in r.output
+
+    # Attacker lops off the most recent entry; pinned verify catches it.
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM lethe_audit WHERE seq >= 2")
+    conn.commit()
+    r = runner.invoke(
+        cli, ["verify-audit", "--database-url", DATABASE_URL, "--expected-head", head]
+    )
+    assert r.exit_code == 1
+    assert "INVALID" in r.output

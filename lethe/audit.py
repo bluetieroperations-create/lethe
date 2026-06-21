@@ -48,6 +48,12 @@ class AuditLog:
         self.conn.commit()
         return h
 
+    def head(self) -> str:
+        """Current tip hash (GENESIS if the log is empty). Record this
+        out-of-band; later pass it to verify_chain(expected_head=...) to detect
+        tip-truncation (deletion of the most recent entries)."""
+        return self._last_hash()
+
     def verify_chain(self, expected_head: str | None = None) -> bool:
         """Verify the hash chain links from genesis to the current tip.
 

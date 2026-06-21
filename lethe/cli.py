@@ -87,3 +87,33 @@ def verify(cert_file: str, public_key: str) -> None:
     ok = verify_certificate(cert, trusted_public_key=public_key)
     click.echo("VALID" if ok else "INVALID")
     raise SystemExit(0 if ok else 1)
+
+
+@cli.command("audit-head")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+def audit_head(database_url: str) -> None:
+    """Print the current audit-log head hash. Record it out-of-band so you can
+    later detect tip-truncation with `verify-audit --expected-head`."""
+    with psycopg.connect(database_url) as conn:
+        click.echo(AuditLog(conn).head())
+
+
+@cli.command("verify-audit")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+@click.option(
+    "--expected-head",
+    default=None,
+    help="The audit head you recorded out-of-band. Without it, tip-truncation "
+    "(deletion of the most recent entries) cannot be detected.",
+)
+def verify_audit(database_url: str, expected_head: str | None) -> None:
+    with psycopg.connect(database_url) as conn:
+        ok = AuditLog(conn).verify_chain(expected_head=expected_head)
+    if expected_head is None:
+        click.echo(
+            "WARNING: no --expected-head given; internal links checked but "
+            "tip-truncation is undetectable.",
+            err=True,
+        )
+    click.echo("VALID" if ok else "INVALID")
+    raise SystemExit(0 if ok else 1)
