@@ -117,3 +117,12 @@ def test_malformed_trusted_key_is_rejected_not_crashed():
         issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=operator,
     )
     assert verify_certificate(cert, trusted_public_key="!!!not-base64") is False
+
+
+def test_certificate_payload_declares_schema_version():
+    signer = Signer.generate()
+    cert = build_certificate(
+        request_id="r", subject_hash="s", layers=_layers(),
+        issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
+    )
+    assert cert.payload["schema"] == "lethe.cert/1"

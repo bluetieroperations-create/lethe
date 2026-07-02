@@ -12,6 +12,8 @@ CLAIM = (
     "outside Lethe's configured connectors."
 )
 
+CERT_SCHEMA_VERSION = "lethe.cert/1"
+
 
 def _canonical_bytes(payload: dict) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -46,6 +48,7 @@ def build_certificate(
     all_verified = bool(ordered) and all(erasures)
 
     payload = {
+        "schema": CERT_SCHEMA_VERSION,
         "request_id": request_id,
         "subject_hash": subject_hash,
         "issued_at": issued_at,
