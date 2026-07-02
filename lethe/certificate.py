@@ -109,3 +109,18 @@ def verify_certificate(
     if hashlib.sha256(data).hexdigest() != cert.payload_hash:
         return False
     return verify_signature(cert.public_key, data, cert.signature)
+
+
+def canonical_payload_bytes(payload: dict) -> bytes:
+    """Public alias: the exact byte encoding that is hashed and signed."""
+    return _canonical_bytes(payload)
+
+
+def certificate_to_dict(cert: Certificate) -> dict:
+    """The wire/JSON envelope — matches schemas/certificate-v1.json."""
+    return {
+        "payload": cert.payload,
+        "payload_hash": cert.payload_hash,
+        "signature": cert.signature,
+        "public_key": cert.public_key,
+    }
