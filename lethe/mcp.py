@@ -269,6 +269,11 @@ def build_context(environ=os.environ) -> ServerContext:
 
 
 def create_server(ctx: ServerContext):
+    # CONCURRENCY INVARIANT: every tool below must stay a plain sync def with
+    # no awaits. FastMCP runs sync tools inline on the event-loop thread, so
+    # calls serialize — which is what makes sharing ONE psycopg connection and
+    # the audit hash-chain's read-tip-then-insert safe. An async handler (or an
+    # SDK that moves sync tools to a threadpool) makes both hazards live.
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
 
