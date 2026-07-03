@@ -46,7 +46,7 @@ def test_forget_deletes_tagged_records_and_returns_valid_certificate(setup):
 
     assert cert.payload["all_verified"] is True
     assert cert.payload["layers"][0]["deleted_count"] == 2
-    assert verify_certificate(cert) is True
+    assert verify_certificate(cert, lethe.signer.public_key_b64()) is True
 
 
 def test_forget_writes_audit_entry_and_purges_ledger(setup):
@@ -74,4 +74,4 @@ def test_forget_unknown_subject_is_empty_and_not_certified_as_erasure(setup):
     assert cert.payload["layers_found"] == 0
     assert cert.payload["records_deleted"] == 0
     # The signed certificate itself is still internally valid and verifiable.
-    assert verify_certificate(cert) is True
+    assert verify_certificate(cert, lethe.signer.public_key_b64()) is True

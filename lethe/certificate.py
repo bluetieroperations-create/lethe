@@ -82,28 +82,26 @@ def build_certificate(
     )
 
 
-def verify_certificate(
-    cert: Certificate, trusted_public_key: str | None = None
-) -> bool:
-    """Verify a deletion certificate.
+def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
+    """Verify a deletion certificate. Key pinning is MANDATORY.
 
     SECURITY: a certificate carries the public key that signed it, so a
     self-verifying check ("does the embedded key validate the embedded
     signature?") only proves internal consistency, NOT authenticity — an
     attacker can mint a fully self-consistent certificate with their own
-    keypair. For the certificate to be proof of *who* signed it, the caller
-    MUST pin ``trusted_public_key`` to the operator's out-of-band-published
-    key (e.g. from /.well-known). When pinned, the certificate's embedded key
-    must match the trusted key before the signature is even checked.
+    keypair. A certificate can therefore only be verified against the
+    operator's out-of-band-published key (e.g. from /.well-known), passed as
+    ``trusted_public_key``; self-consistency-only checks are not proof and
+    are no longer offered. The certificate's embedded key must match the
+    trusted key before the signature is even checked.
     """
-    if trusted_public_key is not None:
-        try:
-            embedded = base64.b64decode(cert.public_key, validate=True)
-            trusted = base64.b64decode(trusted_public_key, validate=True)
-        except Exception:
-            return False
-        if not hmac.compare_digest(embedded, trusted):
-            return False
+    try:
+        embedded = base64.b64decode(cert.public_key, validate=True)
+        trusted = base64.b64decode(trusted_public_key, validate=True)
+    except Exception:
+        return False
+    if not hmac.compare_digest(embedded, trusted):
+        return False
 
     data = _canonical_bytes(cert.payload)
     if hashlib.sha256(data).hexdigest() != cert.payload_hash:

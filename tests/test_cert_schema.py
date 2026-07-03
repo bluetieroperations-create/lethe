@@ -116,3 +116,11 @@ def test_verify_json_garbage_key_is_key_mismatch_not_crash():
     result = verify_certificate_json(data, trusted_public_key="!!!not-base64")
     assert result["valid"] is False
     assert result["reasons"] == ["KEY_MISMATCH"]
+
+
+def test_verify_json_wrong_length_trusted_key_is_key_mismatch():
+    data, _ = _signed_golden()
+    short_but_valid_b64 = "QUJD"  # "ABC" — 3 bytes, valid base64
+    result = verify_certificate_json(data, trusted_public_key=short_but_valid_b64)
+    assert result["valid"] is False
+    assert result["reasons"] == ["KEY_MISMATCH"]

@@ -33,7 +33,7 @@ def test_certificate_verifies():
         request_id="req-1", subject_hash="subjA", layers=_layers(),
         issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
     )
-    assert verify_certificate(cert) is True
+    assert verify_certificate(cert, signer.public_key_b64()) is True
 
 
 def test_all_verified_false_when_a_layer_fails():
@@ -53,7 +53,7 @@ def test_tampering_breaks_verification():
         issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
     )
     cert.payload["subject_hash"] = "someone-else"  # mutate after signing
-    assert verify_certificate(cert) is False
+    assert verify_certificate(cert, signer.public_key_b64()) is False
 
 
 def test_layers_are_canonically_ordered():
