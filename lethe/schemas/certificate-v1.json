@@ -7,8 +7,8 @@
   "required": ["payload", "payload_hash", "signature", "public_key"],
   "properties": {
     "payload_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
-    "public_key": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$" },
+    "public_key": { "type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$" },
     "payload": {
       "type": "object",
       "additionalProperties": false,
@@ -21,7 +21,7 @@
         "schema": { "const": "lethe.cert/1" },
         "request_id": { "type": "string", "minLength": 1 },
         "subject_hash": { "type": "string", "minLength": 1 },
-        "issued_at": { "type": "string", "minLength": 1 },
+        "issued_at": { "type": "string", "minLength": 1, "format": "date-time" },
         "lethe_version": { "type": "string", "minLength": 1 },
         "claim": { "type": "string", "minLength": 1 },
         "all_verified": { "type": "boolean" },
@@ -30,6 +30,7 @@
         "all_layers_handled": { "type": "boolean" },
         "layers": {
           "type": "array",
+          "maxItems": 1000,
           "items": {
             "type": "object",
             "additionalProperties": false,

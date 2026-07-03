@@ -44,3 +44,22 @@ def test_layer_missing_handled_fails():
 
 def test_non_dict_input_fails_not_crashes():
     assert schema_errors("not a cert") != []
+
+
+def test_extra_key_inside_layer_fails():
+    data = _golden()
+    data["payload"]["layers"][0]["sneaky"] = True
+    assert schema_errors(data) != []
+
+
+def test_wrong_type_returns_errors_not_raises():
+    data = _golden()
+    data["payload"]["request_id"] = 123
+    assert any("request_id" in e for e in schema_errors(data))
+
+
+def test_oversized_layers_rejected():
+    data = _golden()
+    layer = dict(data["payload"]["layers"][0])
+    data["payload"]["layers"] = [dict(layer) for _ in range(1001)]
+    assert schema_errors(data) != []
