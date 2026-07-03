@@ -6,16 +6,23 @@ seen the exact blast radius it confirms. See docs/m2m.md."""
 
 import functools
 import json
+import os
 import sys
 import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 
+import psycopg
+
+from .audit import AuditLog
 from .cert_schema import verify_certificate_json
 from .certificate import CERT_SCHEMA_VERSION, certificate_to_dict
+from .connectors.pgvector import PgVectorConnector
 from .core import Lethe
 from .guard import ConfirmGuard, GuardError
 from .hashing import hash_subject
+from .ledger import Ledger
+from .signing import Signer
 from .version import __version__
 
 # Bounds on agent-supplied certificates: reject cheaply BEFORE schema
@@ -214,3 +221,102 @@ def h_verify_certificate(ctx: ServerContext, certificate: dict, public_key: str 
         )
     result = verify_certificate_json(certificate, trusted_public_key=pin)
     return _ok(valid=result["valid"], reasons=result["reasons"], detail=result["detail"])
+
+
+class ConfigError(RuntimeError):
+    pass
+
+
+def build_context(environ=os.environ) -> ServerContext:
+    """Full mode needs LETHE_DATABASE_URL (or DATABASE_URL) + LETHE_SALT +
+    LETHE_KEY_FILE. With no database URL at all, the server starts in
+    verify-only mode: zero infrastructure, only certificate verification."""
+    db_url = environ.get("LETHE_DATABASE_URL") or environ.get("DATABASE_URL")
+    trusted = environ.get("LETHE_TRUSTED_PUBLIC_KEY")
+    if not db_url:
+        return ServerContext(lethe=None, guard=None, trusted_public_key=trusted)
+    missing = [
+        name for name in ("LETHE_SALT", "LETHE_KEY_FILE") if not environ.get(name)
+    ]
+    if missing:
+        raise ConfigError(
+            f"LETHE_DATABASE_URL is set but {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not — full mode needs both "
+            "(unset LETHE_DATABASE_URL to run verify-only)"
+        )
+    with open(environ["LETHE_KEY_FILE"], "rb") as f:
+        signer = Signer.from_private_bytes(f.read())
+    conn = psycopg.connect(db_url)  # lives for the stdio server's lifetime
+    lethe = Lethe(
+        ledger=Ledger(conn),
+        audit=AuditLog(conn),
+        signer=signer,
+        connectors={"pgvector": PgVectorConnector(conn)},
+        salt=environ["LETHE_SALT"],
+    )
+    return ServerContext(lethe=lethe, guard=ConfirmGuard(), trusted_public_key=trusted)
+
+
+def create_server(ctx: ServerContext):
+    from mcp.server.fastmcp import FastMCP
+    from mcp.types import ToolAnnotations
+
+    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+    write = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+    destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+
+    server = FastMCP(
+        "lethe",
+        instructions=(
+            "Provable deletion for AI memory. Destructive flow is two-step: "
+            "lethe_forget_preview returns the blast radius plus a confirm_token; "
+            "lethe_forget(subject_id, confirm_token) executes and returns a signed "
+            "certificate. Verify any certificate with lethe_verify_certificate."
+        ),
+    )
+
+    @server.tool(annotations=read_only)
+    def lethe_status() -> dict:
+        """Server mode (full or verify-only), connectors, audit head, versions."""
+        return h_status(ctx)
+
+    @server.tool(annotations=write)
+    def lethe_tag(subject_id: str, store: str, namespace: str, record_id: str) -> dict:
+        """Tag a stored record as belonging to a data subject, so a later
+        forget can find and provably delete it."""
+        return h_tag(ctx, subject_id, store, namespace, record_id)
+
+    @server.tool(annotations=read_only)
+    def lethe_forget_preview(subject_id: str) -> dict:
+        """Dry run: per-layer record counts that a forget WOULD delete, plus a
+        single-use confirm_token (expires in ~10 minutes). Deletes nothing."""
+        return h_forget_preview(ctx, subject_id)
+
+    @server.tool(annotations=destructive)
+    def lethe_forget(subject_id: str, confirm_token: str) -> dict:
+        """DESTRUCTIVE: permanently delete the subject across all tagged layers,
+        verify absence, and return the signed deletion certificate. Requires the
+        confirm_token from lethe_forget_preview for this same subject."""
+        return h_forget(ctx, subject_id, confirm_token)
+
+    @server.tool(annotations=read_only)
+    def lethe_verify_subject(subject_id: str) -> dict:
+        """Post-hoc spot check: re-verify (without deleting) whether the
+        subject's tagged records are absent from each layer."""
+        return h_verify_subject(ctx, subject_id)
+
+    @server.tool(annotations=read_only)
+    def lethe_verify_certificate(certificate: dict, public_key: str | None = None) -> dict:
+        """Verify a Lethe deletion certificate: JSON-Schema shape plus key-pinned
+        Ed25519 check. public_key (base64) overrides LETHE_TRUSTED_PUBLIC_KEY."""
+        return h_verify_certificate(ctx, certificate, public_key)
+
+    return server
+
+
+def main() -> None:
+    try:
+        ctx = build_context()
+    except ConfigError as e:
+        raise SystemExit(f"lethe-mcp: {e}")
+    create_server(ctx).run()  # stdio transport

@@ -244,3 +244,56 @@ def test_verify_certificate_schema_mismatch_through_handler(ctx):
     assert r["ok"] is True
     assert r["valid"] is False
     assert r["reasons"] == ["SCHEMA_MISMATCH"]
+
+
+import asyncio
+
+from lethe.mcp import ConfigError, build_context, create_server
+
+
+def test_create_server_registers_six_tools_with_honest_annotations():
+    vctx = ServerContext(lethe=None, guard=None, trusted_public_key=None)
+    server = create_server(vctx)
+    tools = asyncio.run(server.list_tools())
+    by_name = {t.name: t for t in tools}
+    assert sorted(by_name) == [
+        "lethe_forget", "lethe_forget_preview", "lethe_status",
+        "lethe_tag", "lethe_verify_certificate", "lethe_verify_subject",
+    ]
+    assert by_name["lethe_forget"].annotations.destructiveHint is True
+    for name, tool in by_name.items():
+        if name != "lethe_forget":
+            assert tool.annotations.destructiveHint is False
+
+
+def test_build_context_no_env_is_verify_only():
+    ctx2 = build_context(environ={})
+    assert ctx2.verify_only is True
+    assert ctx2.trusted_public_key is None
+
+
+def test_build_context_partial_env_fails_fast():
+    env = {"LETHE_DATABASE_URL": "postgresql://example/db"}
+    with pytest.raises(ConfigError) as e:
+        build_context(environ=env)
+    assert "LETHE_SALT" in str(e.value)
+    assert "LETHE_KEY_FILE" in str(e.value)
+
+
+def test_build_context_full_env(tmp_path):
+    import os as _os
+    key_file = tmp_path / "key.bin"
+    key_file.write_bytes(Signer.generate().private_bytes())
+    env = {
+        "LETHE_DATABASE_URL": _os.environ["LETHE_TEST_DATABASE_URL"],
+        "LETHE_SALT": "s",
+        "LETHE_KEY_FILE": str(key_file),
+        "LETHE_TRUSTED_PUBLIC_KEY": "abc=",
+    }
+    full = build_context(environ=env)
+    try:
+        assert full.verify_only is False
+        assert "pgvector" in full.lethe.connectors
+        assert full.trusted_public_key == "abc="
+    finally:
+        full.lethe.ledger.conn.close()
