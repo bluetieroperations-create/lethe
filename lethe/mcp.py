@@ -244,8 +244,19 @@ def build_context(environ=os.environ) -> ServerContext:
             f"{'is' if len(missing) == 1 else 'are'} not — full mode needs both "
             "(unset LETHE_DATABASE_URL to run verify-only)"
         )
-    with open(environ["LETHE_KEY_FILE"], "rb") as f:
-        signer = Signer.from_private_bytes(f.read())
+    key_file = environ["LETHE_KEY_FILE"]
+    try:
+        with open(key_file, "rb") as f:
+            signer = Signer.from_private_bytes(f.read())
+    except (OSError, ValueError) as e:
+        # Fail fast with the same clean diagnostic as every other misconfig
+        # (main() only maps ConfigError to a SystemExit message): a missing or
+        # malformed key file must not dump a raw traceback at startup. Only the
+        # exception TYPE is surfaced — a raw OSError can echo the key path.
+        raise ConfigError(
+            f"LETHE_KEY_FILE ({key_file!r}) could not be loaded as an Ed25519 "
+            f"private key ({type(e).__name__}); it must be 32 raw private-key bytes"
+        )
     conn = psycopg.connect(db_url)  # lives for the stdio server's lifetime
     lethe = Lethe(
         ledger=Ledger(conn),

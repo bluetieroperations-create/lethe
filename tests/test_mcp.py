@@ -280,6 +280,30 @@ def test_build_context_partial_env_fails_fast():
     assert "LETHE_KEY_FILE" in str(e.value)
 
 
+def test_build_context_missing_key_file_fails_fast():
+    env = {
+        "LETHE_DATABASE_URL": "postgresql://example/db",
+        "LETHE_SALT": "s",
+        "LETHE_KEY_FILE": "C:/lethe/no/such/key.bin",
+    }
+    with pytest.raises(ConfigError) as e:
+        build_context(environ=env)
+    assert "LETHE_KEY_FILE" in str(e.value)
+
+
+def test_build_context_bad_key_file_fails_fast(tmp_path):
+    key_file = tmp_path / "key.bin"
+    key_file.write_bytes(b"too-short-to-be-ed25519")
+    env = {
+        "LETHE_DATABASE_URL": "postgresql://example/db",
+        "LETHE_SALT": "s",
+        "LETHE_KEY_FILE": str(key_file),
+    }
+    with pytest.raises(ConfigError) as e:
+        build_context(environ=env)
+    assert "LETHE_KEY_FILE" in str(e.value)
+
+
 def test_build_context_full_env(tmp_path):
     import os as _os
     key_file = tmp_path / "key.bin"
