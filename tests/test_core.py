@@ -75,3 +75,49 @@ def test_forget_unknown_subject_is_empty_and_not_certified_as_erasure(setup):
     assert cert.payload["records_deleted"] == 0
     # The signed certificate itself is still internally valid and verifiable.
     assert verify_certificate(cert, lethe.signer.public_key_b64()) is True
+
+
+def test_preview_counts_layers_without_deleting(conn):
+    from lethe.audit import AuditLog
+    from lethe.core import Lethe
+    from lethe.ledger import Ledger
+    from lethe.signing import Signer
+
+    ledger = Ledger(conn)
+    audit = AuditLog(conn)
+    ledger.init_schema()
+    audit.init_schema()
+    lethe = Lethe(
+        ledger=ledger, audit=audit, signer=Signer.generate(),
+        connectors={}, salt="test-salt",
+    )
+    lethe.tag("alice@example.com", "pgvector", "docs", "d1")
+    lethe.tag("alice@example.com", "pgvector", "docs", "d2")
+    lethe.tag("alice@example.com", "pgvector", "chats", "c1")
+
+    p = lethe.preview("alice@example.com")
+
+    assert p["subject_hash"] == lethe._subject_hash("alice@example.com")
+    assert p["layers"] == [
+        {"store": "pgvector", "namespace": "chats", "count": 1},
+        {"store": "pgvector", "namespace": "docs", "count": 2},
+    ]
+    # read-only: the ledger still holds all three rows
+    assert len(ledger.lookup(p["subject_hash"])) == 3
+
+
+def test_preview_unknown_subject_is_empty(conn):
+    from lethe.audit import AuditLog
+    from lethe.core import Lethe
+    from lethe.ledger import Ledger
+    from lethe.signing import Signer
+
+    ledger = Ledger(conn)
+    audit = AuditLog(conn)
+    ledger.init_schema()
+    audit.init_schema()
+    lethe = Lethe(
+        ledger=ledger, audit=audit, signer=Signer.generate(),
+        connectors={}, salt="test-salt",
+    )
+    assert lethe.preview("nobody@example.com")["layers"] == []

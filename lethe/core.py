@@ -41,6 +41,21 @@ class Lethe:
             )
         )
 
+    def preview(self, subject_id: str) -> dict:
+        """Read-only blast radius: what forget() WOULD touch, per layer.
+        Feeds the MCP two-step guard; deletes nothing, purges nothing."""
+        subject_hash = self._subject_hash(subject_id)
+        counts: dict[tuple[str, str], int] = defaultdict(int)
+        for row in self.ledger.lookup(subject_hash):
+            counts[(row.store, row.namespace)] += 1
+        return {
+            "subject_hash": subject_hash,
+            "layers": [
+                {"store": store, "namespace": namespace, "count": n}
+                for (store, namespace), n in sorted(counts.items())
+            ],
+        }
+
     def forget(
         self,
         subject_id: str,
