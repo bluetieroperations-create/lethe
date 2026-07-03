@@ -21,7 +21,7 @@
         "schema": { "const": "lethe.cert/1" },
         "request_id": { "type": "string", "minLength": 1 },
         "subject_hash": { "type": "string", "minLength": 1 },
-        "issued_at": { "type": "string", "minLength": 1, "format": "date-time" },
+        "issued_at": { "type": "string", "minLength": 1 },
         "lethe_version": { "type": "string", "minLength": 1 },
         "claim": { "type": "string", "minLength": 1 },
         "all_verified": { "type": "boolean" },
