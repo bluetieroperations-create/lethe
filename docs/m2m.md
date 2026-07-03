@@ -37,8 +37,11 @@ Claude Code registration example:
 ## The two-step flow
 
 1. `lethe_forget_preview(subject_id)` → per-layer counts + `confirm_token`.
-2. `lethe_forget(subject_id, confirm_token)` → executes only if the data still
-   matches what the preview showed.
+2. `lethe_forget(subject_id, confirm_token)` → executes only if the previewed
+   blast radius still matches. (Residual window: records tagged for the same
+   subject between confirm and execution are still deleted and honestly
+   counted in the certificate — the guard pins WHO gets deleted and what you
+   saw, not a serialized snapshot.)
 
 Errors are machine-branchable: `{"ok": false, "error": {"code", "message",
 "retriable"}}` with codes `SUBJECT_NOT_FOUND`, `NO_LAYERS_CONFIGURED`,
@@ -48,6 +51,11 @@ Errors are machine-branchable: `{"ok": false, "error": {"code", "message",
 process-local: a server restart voids them. Consuming a token is an
 irrevocable pre-commit — if the delete fails after confirmation, re-preview
 and confirm again (under-executing always beats double-executing).
+
+A forget that ends with `all_verified: false` (for example an unconfigured
+store) is a terminal state for automation: retrying converges to the same
+honest result and the provenance ledger is preserved. Escalate to the
+operator; do not loop.
 
 ## Verifying a certificate you were handed
 

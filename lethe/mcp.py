@@ -4,7 +4,10 @@ Six tools; the only destructive one (lethe_forget) requires a single-use
 confirm token minted by lethe_forget_preview, so a machine caller must have
 seen the exact blast radius it confirms. See docs/m2m.md."""
 
+import functools
 import json
+import sys
+import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -41,13 +44,34 @@ def _err(code: str, message: str, retriable: bool = False) -> dict:
     return {"ok": False, "error": {"code": code, "message": message, "retriable": retriable}}
 
 
-_VERIFY_ONLY = _err(
-    "NO_LAYERS_CONFIGURED",
-    "server is running verify-only (no database configured); "
-    "set LETHE_DATABASE_URL, LETHE_SALT and LETHE_KEY_FILE for full mode",
-)
+def _verify_only_err() -> dict:
+    # Fresh dict per call: a shared module-level envelope could be mutated
+    # by one caller and poison every later response.
+    return _err(
+        "NO_LAYERS_CONFIGURED",
+        "server is running verify-only (no database configured); "
+        "set LETHE_DATABASE_URL, LETHE_SALT and LETHE_KEY_FILE for full mode",
+    )
 
 
+def _enveloped(fn):
+    """Handlers must NEVER leak a raw exception to the transport: agents
+    branch on error.code, and raw psycopg/connector text can leak DSNs.
+    Expected errors return their own envelopes; anything else becomes
+    INTERNAL with only the exception TYPE (details stay in server stderr)."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            return _err("INTERNAL", f"unexpected {type(e).__name__} in {fn.__name__}", retriable=True)
+
+    return wrapper
+
+
+@_enveloped
 def h_status(ctx: ServerContext) -> dict:
     common = {
         "lethe_version": __version__,
@@ -64,20 +88,28 @@ def h_status(ctx: ServerContext) -> dict:
     )
 
 
+@_enveloped
 def h_tag(ctx: ServerContext, subject_id: str, store: str, namespace: str, record_id: str) -> dict:
     if ctx.verify_only:
-        return _VERIFY_ONLY
+        return _verify_only_err()
     ctx.lethe.tag(subject_id, store, namespace, record_id)
-    return _ok(tagged={"store": store, "namespace": namespace, "record_id": record_id})
+    out = _ok(tagged={"store": store, "namespace": namespace, "record_id": record_id})
+    if store not in ctx.lethe.connectors:
+        out["warning"] = (
+            f"store '{store}' has no configured connector; "
+            "forget will report it handled:false until one is configured"
+        )
+    return out
 
 
 def _layer_tuples(preview: dict) -> list[tuple[str, str, int]]:
     return [(l["store"], l["namespace"], l["count"]) for l in preview["layers"]]
 
 
+@_enveloped
 def h_forget_preview(ctx: ServerContext, subject_id: str) -> dict:
     if ctx.verify_only:
-        return _VERIFY_ONLY
+        return _verify_only_err()
     p = ctx.lethe.preview(subject_id)
     if not p["layers"]:
         return _err("SUBJECT_NOT_FOUND", "no tagged records for this subject")
@@ -90,9 +122,10 @@ def h_forget_preview(ctx: ServerContext, subject_id: str) -> dict:
     )
 
 
+@_enveloped
 def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
     if ctx.verify_only:
-        return _VERIFY_ONLY
+        return _verify_only_err()
     p = ctx.lethe.preview(subject_id)
     if not p["layers"]:
         return _err("SUBJECT_NOT_FOUND", "no tagged records for this subject")
@@ -105,7 +138,14 @@ def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
     except Exception as e:
         # Connector/DB failure mid-loop: ledger is preserved by core for retry.
         # The token is already burned (irrevocable pre-commit): re-preview.
-        return _err("CONNECTOR_ERROR", f"forget failed: {e}", retriable=True)
+        # Only the exception TYPE goes to the caller: raw str(e) from
+        # psycopg/connector errors can embed DSNs or hostnames.
+        return _err(
+            "CONNECTOR_ERROR",
+            f"forget failed mid-loop ({type(e).__name__}); "
+            "ledger preserved — re-preview and confirm again",
+            retriable=True,
+        )
     return _ok(
         certificate=certificate_to_dict(cert),
         all_verified=cert.payload["all_verified"],
@@ -113,9 +153,10 @@ def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
     )
 
 
+@_enveloped
 def h_verify_subject(ctx: ServerContext, subject_id: str) -> dict:
     if ctx.verify_only:
-        return _VERIFY_ONLY
+        return _verify_only_err()
     subject_hash = hash_subject(subject_id, ctx.lethe.salt)
     groups: dict[tuple[str, str], list[str]] = defaultdict(list)
     for row in ctx.lethe.ledger.lookup(subject_hash):
@@ -157,6 +198,7 @@ def _cert_too_large(certificate) -> bool:
         return False
 
 
+@_enveloped
 def h_verify_certificate(ctx: ServerContext, certificate: dict, public_key: str | None = None) -> dict:
     pin = public_key or ctx.trusted_public_key
     if not pin:

@@ -196,3 +196,51 @@ def test_verify_only_context_refuses_writes():
     assert r["error"]["code"] == "NO_LAYERS_CONFIGURED"
     r = h_verify_certificate(ctx, {})
     assert r["error"]["code"] == "KEY_MISMATCH"  # no pin available at all
+
+
+def test_verify_subject_connector_crash_returns_internal_envelope(ctx):
+    class ExplodingStore(FakeStore):
+        def verify(self, namespace, ids):
+            raise RuntimeError("boom")
+    exploding = ExplodingStore()
+    exploding.seed("docs", ["d1"])
+    ctx.lethe.connectors["exploding"] = exploding
+    h_tag(ctx, "carol@x.com", "exploding", "docs", "d1")
+    r = h_verify_subject(ctx, "carol@x.com")
+    assert r["ok"] is False
+    assert r["error"]["code"] == "INTERNAL"
+    assert "boom" not in r["error"]["message"]  # no raw exception text
+
+
+def test_verify_subject_unconfigured_store_is_handled_false(ctx):
+    h_tag(ctx, "dave@x.com", "ghost", "docs", "d1")
+    r = h_verify_subject(ctx, "dave@x.com")
+    assert r["ok"] is True
+    assert r["layers"] == [
+        {"store": "ghost", "namespace": "docs", "verified_absent": False, "handled": False}
+    ]
+
+
+def test_tag_unknown_store_warns(ctx):
+    r = h_tag(ctx, "erin@x.com", "ghost", "docs", "d1")
+    assert r["ok"] is True
+    assert "ghost" in r["warning"]
+
+
+def test_verify_only_refuses_all_write_and_read_paths():
+    vctx = ServerContext(lethe=None, guard=None, trusted_public_key=None)
+    for call in (
+        lambda: h_forget_preview(vctx, "a@x.com"),
+        lambda: h_forget(vctx, "a@x.com", "v1.x"),
+        lambda: h_verify_subject(vctx, "a@x.com"),
+    ):
+        r = call()
+        assert r["ok"] is False
+        assert r["error"]["code"] == "NO_LAYERS_CONFIGURED"
+
+
+def test_verify_certificate_schema_mismatch_through_handler(ctx):
+    r = h_verify_certificate(ctx, {"payload": {}, "payload_hash": "zz", "signature": "a", "public_key": "b"})
+    assert r["ok"] is True
+    assert r["valid"] is False
+    assert r["reasons"] == ["SCHEMA_MISMATCH"]

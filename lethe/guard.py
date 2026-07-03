@@ -2,8 +2,12 @@
 
 forget_preview mints a single-use HMAC token bound to (subject, exact per-layer
 counts, expiry). forget only executes with a token whose fingerprint still
-matches — so the caller provably SAW the blast radius it is confirming, and a
-hallucinated subject id or mid-flight data change cannot silently delete.
+matches — so the caller provably SAW the blast radius it is confirming: a
+hallucinated subject id cannot delete anything, and a change in the previewed
+blast radius forces re-confirmation. Residual window: records tagged for the
+SAME subject between confirmation and execution may still be deleted — the
+certificate reports actual counts honestly, and the blast radius remains
+bounded to the confirmed subject.
 State is process-local by design (stdio server inside one operator's
 perimeter); a restart voids outstanding tokens and the caller re-previews.
 

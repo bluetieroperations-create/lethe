@@ -98,9 +98,16 @@ def test_audit_failure_after_delete_does_not_yield_a_later_false_certificate(env
     lethe = make()
     lethe.tag("user-1", "pgvector", "test_vectors", "r1")
 
-    # Make the audit append blow up after the delete has committed.
+    # Make the audit append blow up after the delete has committed. The
+    # pre-flight forget_started event must be let through: this test targets
+    # the window where the delete is already committed but the COMPLETION
+    # audit entry cannot be written.
+    real_append = AuditLog.append.__get__(audit)
+
     def boom(entry):
-        raise RuntimeError("audit backend down")
+        if entry.get("event") == "forget":
+            raise RuntimeError("audit backend down")
+        return real_append(entry)
 
     audit.append = boom  # type: ignore[method-assign]
 

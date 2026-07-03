@@ -71,6 +71,19 @@ class Lethe:
         for row in self.ledger.lookup(subject_hash):
             groups[(row.store, row.namespace)].append(row.record_id)
 
+        # Pre-flight audit event: a mid-loop connector failure must never
+        # leave real deletions with no audit trace; the started/completed
+        # pair brackets every destructive attempt.
+        self.audit.append(
+            {
+                "event": "forget_started",
+                "request_id": request_id,
+                "subject_hash": subject_hash,
+                "issued_at": issued_at,
+                "requested_layers": len(groups),
+            }
+        )
+
         layers: list[LayerResult] = []
         for (store, namespace), ids in groups.items():
             connector = self.connectors.get(store)
