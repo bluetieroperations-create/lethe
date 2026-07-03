@@ -126,6 +126,18 @@ model weights are out of scope by definition).
 | `lethe audit-head` | Print the audit-log tip hash (record it out-of-band) |
 | `lethe verify-audit --expected-head H` | Detect tampering/truncation of the audit log |
 
+## For AI agents (MCP)
+
+Lethe ships an MCP server so autonomous agents can execute provable deletion
+and verify certificates machine-to-machine:
+
+    pip install "lethe[mcp]"
+    lethe-mcp
+
+Destructive deletes are two-step (preview → confirm token → forget), and any
+agent can verify a certificate with zero infrastructure. Full guide:
+[docs/m2m.md](docs/m2m.md).
+
 ## Security model & honest limits
 
 - **Self-hosted.** The SDK and the provenance ledger run in your own Postgres.
