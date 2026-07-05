@@ -9,3 +9,7 @@ key*.bin
 cert.json
 dist/
 build/
+
+# internal dev-process docs — kept local, never published
+docs/superpowers/
+2026-06-20-lethe-design.md
