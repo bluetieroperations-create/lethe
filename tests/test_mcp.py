@@ -321,3 +321,113 @@ def test_build_context_full_env(tmp_path):
         assert full.trusted_public_key == "abc="
     finally:
         full.lethe.ledger.conn.close()
+
+
+def test_build_context_initializes_schema_on_fresh_db(tmp_path):
+    """Live-verify regression: a fresh operator's very first tool call must
+    work. build_context must self-initialize the schema (idempotent) instead
+    of dying UndefinedTable. Deliberately does NOT take the `conn` fixture — a
+    real single-process deployment has exactly ONE connection; holding a second
+    open against Neon's transaction pooler makes cross-connection DDL flaky."""
+    import os as _os
+
+    import psycopg as _psycopg
+
+    url = _os.environ["LETHE_TEST_DATABASE_URL"]
+    # Make the DB genuinely fresh, then CLOSE this connection so build_context's
+    # connection is the only one for the rest of the test.
+    with _psycopg.connect(url) as c:
+        with c.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS lethe_provenance, lethe_audit CASCADE")
+        c.commit()
+
+    key_file = tmp_path / "key.bin"
+    key_file.write_bytes(Signer.generate().private_bytes())
+    full = build_context(
+        environ={"LETHE_DATABASE_URL": url, "LETHE_SALT": "s", "LETHE_KEY_FILE": str(key_file)}
+    )
+    try:
+        r = h_status(full)
+        assert r["ok"] is True
+        assert r["mode"] == "full"
+        assert h_tag(full, "fresh@x.com", "pgvector", "sometable", "r1")["ok"] is True
+        assert h_forget_preview(full, "fresh@x.com")["ok"] is True
+    finally:
+        full.lethe.ledger.conn.close()
+
+
+def test_handler_recovers_after_sql_error(ctx):
+    """Live-verify regression: a failed statement aborts the shared psycopg
+    transaction; without a rollback in the handler error path, EVERY later
+    call fails InFailedSqlTransaction until restart. With the fix, the handler
+    that hits the aborted state returns a clean INTERNAL envelope AND rolls
+    back, so the call AFTER it recovers instead of cascading forever."""
+    ctx.lethe.ledger.init_schema()  # tables exist; isolate the fault we inject
+    ctx.lethe.audit.init_schema()
+    import psycopg as _psycopg
+    with pytest.raises(_psycopg.errors.UndefinedTable):
+        with ctx.lethe.ledger.conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM does_not_exist_xyz")
+    # The transaction is now aborted. The next handler hits it, returns a clean
+    # envelope (not a raw psycopg crash), and rolls back in the error path...
+    poisoned = h_status(ctx)
+    assert poisoned["ok"] is False and poisoned["error"]["code"] == "INTERNAL"
+    # ...so the following call recovers fully.
+    assert h_status(ctx)["ok"] is True
+
+
+def test_forget_through_mcp_deletes_real_pgvector_rows(conn):
+    """CRITICAL coverage (eval-critic): every other MCP forget test uses an
+    in-memory FakeStore and 'proves' deletion by asserting a Python dict is
+    empty — it would pass even if real deletion were fully stubbed. This drives
+    the composed path h_tag -> h_forget_preview -> h_forget through the REAL
+    PgVectorConnector and asserts the rows are gone from Postgres (SELECT
+    count == 0), plus a genuine all_verified certificate."""
+    from lethe.connectors.pgvector import PgVectorConnector
+
+    ledger = Ledger(conn)
+    audit = AuditLog(conn)
+    ledger.init_schema()
+    audit.init_schema()
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE mcp_real_vectors (id TEXT PRIMARY KEY, body TEXT)")
+        cur.executemany(
+            "INSERT INTO mcp_real_vectors (id, body) VALUES (%s, %s)",
+            [("a1", "alice cv"), ("a2", "alice chat"), ("b1", "bob cv")],
+        )
+    conn.commit()
+
+    signer = Signer.generate()
+    lethe = Lethe(
+        ledger=ledger, audit=audit, signer=signer,
+        connectors={"pgvector": PgVectorConnector(conn)}, salt="real-e2e-salt",
+    )
+    ctx = ServerContext(
+        lethe=lethe, guard=ConfirmGuard(), trusted_public_key=signer.public_key_b64()
+    )
+
+    assert h_tag(ctx, "alice@real.test", "pgvector", "mcp_real_vectors", "a1")["ok"]
+    assert h_tag(ctx, "alice@real.test", "pgvector", "mcp_real_vectors", "a2")["ok"]
+
+    prev = h_forget_preview(ctx, "alice@real.test")
+    assert prev["ok"] and prev["layers"] == [
+        {"store": "pgvector", "namespace": "mcp_real_vectors", "count": 2}
+    ]
+
+    result = h_forget(ctx, "alice@real.test", prev["confirm_token"])
+    assert result["ok"] and result["all_verified"] is True
+    assert result["records_deleted"] == 2
+
+    # The certificate verifies against the pinned key...
+    assert h_verify_certificate(ctx, result["certificate"])["valid"] is True
+
+    # ...and — the point of this test — the rows are actually GONE from Postgres,
+    # while bob's untagged row is untouched. Checked with real SQL, not a dict.
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM mcp_real_vectors ORDER BY id")
+        remaining = [row[0] for row in cur.fetchall()]
+    assert remaining == ["b1"]
+
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS mcp_real_vectors")
+    conn.commit()

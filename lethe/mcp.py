@@ -61,6 +61,17 @@ def _verify_only_err() -> dict:
     )
 
 
+def _rollback(ctx) -> None:
+    """A failed statement leaves the shared psycopg connection in an aborted
+    transaction; without this every later call fails InFailedSqlTransaction
+    until restart (found by live MCP verification, not the test suite)."""
+    if isinstance(ctx, ServerContext) and ctx.lethe is not None:
+        try:
+            ctx.lethe.ledger.conn.rollback()
+        except Exception:
+            pass  # connection may be gone entirely; next call reports INTERNAL
+
+
 def _enveloped(fn):
     """Handlers must NEVER leak a raw exception to the transport: agents
     branch on error.code, and raw psycopg/connector text can leak DSNs.
@@ -73,6 +84,7 @@ def _enveloped(fn):
             return fn(*args, **kwargs)
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
+            _rollback(args[0] if args else None)
             return _err("INTERNAL", f"unexpected {type(e).__name__} in {fn.__name__}", retriable=True)
 
     return wrapper
@@ -147,6 +159,7 @@ def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
         # The token is already burned (irrevocable pre-commit): re-preview.
         # Only the exception TYPE goes to the caller: raw str(e) from
         # psycopg/connector errors can embed DSNs or hostnames.
+        _rollback(ctx)
         return _err(
             "CONNECTOR_ERROR",
             f"forget failed mid-loop ({type(e).__name__}); "
@@ -265,6 +278,11 @@ def build_context(environ=os.environ) -> ServerContext:
         connectors={"pgvector": PgVectorConnector(conn)},
         salt=environ["LETHE_SALT"],
     )
+    # Self-initialize (idempotent CREATE IF NOT EXISTS): a fresh operator's
+    # first tool call must work without a separate init-db step — without this
+    # the very first query dies UndefinedTable (found by live MCP verification).
+    lethe.ledger.init_schema()
+    lethe.audit.init_schema()
     return ServerContext(lethe=lethe, guard=ConfirmGuard(), trusted_public_key=trusted)
 
 
