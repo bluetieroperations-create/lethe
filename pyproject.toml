@@ -1,14 +1,27 @@
 [project]
+# NOTE: "lethe" is TAKEN on PyPI (lithography lib). Before publishing, rename to
+# the chosen distribution name (available as of 2026-07-03: lethehq, lethe-delete,
+# lethe-forget). The import package stays `lethe` either way.
 name = "lethe"
 version = "0.1.0"
-description = "The forget button for AI — provable data-subject deletion for AI memory."
+description = "The forget button for AI — provable data-subject deletion for AI memory, with signed deletion certificates."
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["gdpr", "ccpa", "dsar", "right-to-be-forgotten", "deletion", "vector-database", "rag", "ai-memory", "mcp", "compliance"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
 ]
 dependencies = ["psycopg[binary]>=3.1", "cryptography>=42", "click>=8.1"]
+
+[project.urls]
+Repository = "https://github.com/bluetieroperations-create/lethe"
+Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9"]
