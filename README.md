@@ -8,8 +8,10 @@ Self-hosted: Lethe runs inside *your* infrastructure. The tool that erases your
 data never becomes a new place your data goes.
 
 > **Status:** v0.1, early but real. Connectors: **pgvector** + **Pinecone**.
-> The full delete loop is tested end-to-end against real Postgres and has been
-> through four independent security-audit passes. Not yet on PyPI.
+> The full delete loop is tested end-to-end against real Postgres (pgvector);
+> the Pinecone connector is unit-tested against a mock `Index`, not live
+> Pinecone. Hardened through four rounds of adversarial self-review (internal,
+> not third-party). Not yet on PyPI.
 
 ---
 
@@ -102,7 +104,11 @@ assert verify_certificate(cert, trusted_public_key=PUBLISHED_PUBKEY)
 Ed25519-signed, tamper-evident, independently verifiable. It states exactly what
 happened and **scopes its claim honestly** — *"deleted across these retrieval
 layers and verified absent,"* never "perfectly erased everywhere" (backups and
-model weights are out of scope by definition).
+model weights are out of scope by definition). `verified_absent` means Lethe
+re-queried the configured endpoint immediately after deleting and saw the
+records gone *at issue time* — it is not a guarantee against read replicas,
+query caches, or asynchronous propagation (notably Pinecone, whose deletes are
+eventually consistent).
 
 ```json
 {
@@ -135,7 +141,8 @@ and verify certificates machine-to-machine:
     lethe-mcp
 
 Destructive deletes are two-step (preview → confirm token → forget), and any
-agent can verify a certificate with zero infrastructure. Full guide:
+agent can verify a certificate with zero infrastructure (you still need the
+operator's published public key to pin against). Full guide:
 [docs/m2m.md](docs/m2m.md).
 
 ## Security model & honest limits
@@ -145,6 +152,14 @@ agent can verify a certificate with zero infrastructure. Full guide:
 - **No raw PII in the ledger.** Subjects are stored as HMAC-SHA256 hashes.
 - **Verify with a pinned key.** An unpinned certificate check only proves
   internal consistency; always pin your published public key.
+- **`verified_absent` is a point-in-time re-query, not a replication proof.**
+  For eventually-consistent stores (Pinecone) a delete may not have propagated
+  to every replica at issue time. pgvector verifies read-your-writes on one
+  connection; a read-replica DSN would reintroduce the gap.
+- **Audit truncation needs an out-of-band head.** Mid-chain edits are caught
+  automatically; detecting deletion of the *most recent* entries requires
+  recording `lethe audit-head` out-of-band and checking `verify-audit
+  --expected-head`.
 - **Coverage = what flows through Lethe.** Writes that bypass the wrapper/`tag`
   aren't tracked. Wrap your store, or tag explicitly.
 - **Pre-existing data** (written before you adopted Lethe) needs retroactive
@@ -155,7 +170,9 @@ agent can verify a certificate with zero infrastructure. Full guide:
 ## Connectors
 
 - **pgvector** (and any Postgres table) — `PgVectorConnector`
-- **Pinecone** — `PineconeConnector` (pass your `Index`)
+- **Pinecone** — `PineconeConnector` (pass your `Index`). Note: Pinecone
+  deletes are eventually consistent, so `verified_absent` is asserted at issue
+  time against the queried endpoint, not proven across replicas.
 - Roadmap: Weaviate, Qdrant, Redis, conversation logs.
 
 ## License

@@ -75,6 +75,13 @@ layer was genuinely erased AND at least one layer was found),
 `all_verified: false` is an honest record of a partial/failed deletion — do
 not treat it as proof of erasure.
 
+`verified_absent` means Lethe re-queried the configured endpoint immediately
+after deleting and saw the records gone **at issue time** — it is not a
+guarantee against read replicas, caches, or asynchronous propagation. For
+eventually-consistent stores (notably Pinecone) a delete may not have reached
+every replica when the certificate was signed; treat such a layer as
+"delete issued and confirmed on the queried endpoint," not "globally gone."
+
 ## Roadmap (v2)
 
 Cross-org A2A deletion requests; x402-paid verification / hash

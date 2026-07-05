@@ -7,9 +7,11 @@ from .models import Certificate, LayerResult
 from .signing import Signer, verify_signature
 
 CLAIM = (
-    "Deleted across the listed retrieval layers and verified absent. "
-    "Not a guarantee of erasure from backups, model weights, or systems "
-    "outside Lethe's configured connectors."
+    "Deleted across the listed retrieval layers and verified absent by re-query "
+    "at issue time against the configured endpoint. Not a guarantee of erasure "
+    "from backups, model weights, or systems outside Lethe's configured "
+    "connectors, nor a guarantee against read replicas, caches, or asynchronous "
+    "propagation (e.g. eventually-consistent stores such as Pinecone)."
 )
 
 CERT_SCHEMA_VERSION = "lethe.cert/1"

@@ -3,12 +3,17 @@
 Wraps a Pinecone ``Index`` object (duck-typed — Lethe does not depend on the
 pinecone client). Lethe's ``namespace`` maps to a Pinecone namespace.
 
-Two Pinecone realities shape this connector:
+Three Pinecone realities shape this connector:
   * ``index.delete(ids=...)`` returns no count, so to report an accurate
     ``deleted_count`` for the certificate, ``delete()`` first ``fetch``es the
     ids to see how many actually existed, then deletes.
   * Pinecone upserts on id collision, so ids must be unique per record — the
     LetheVectorStore wrapper enforces that up front (see its id_key handling).
+  * Pinecone deletes are EVENTUALLY CONSISTENT. ``verify()`` fetches
+    immediately after ``delete()``, so ``verified_absent`` reflects what the
+    queried endpoint returns at issue time — propagation to every replica is
+    not instantaneous. The certificate's claim is scoped to say exactly this;
+    do not read a Pinecone ``verified_absent: true`` as a cross-replica proof.
 """
 
 # Pinecone caps ids per delete/fetch call; chunk to stay under it.
