@@ -137,7 +137,7 @@ eventually consistent).
 Lethe ships an MCP server so autonomous agents can execute provable deletion
 and verify certificates machine-to-machine:
 
-    pip install "lethe[mcp]"
+    pip install "lethe-delete[mcp]"
     lethe-mcp
 
 Destructive deletes are two-step (preview → confirm token → forget), and any

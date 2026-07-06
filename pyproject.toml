@@ -1,8 +1,8 @@
 [project]
-# NOTE: "lethe" is TAKEN on PyPI (lithography lib). Before publishing, rename to
-# the chosen distribution name (available as of 2026-07-03: lethehq, lethe-delete,
-# lethe-forget). The import package stays `lethe` either way.
-name = "lethe"
+# Distribution name (PyPI): "lethe" is taken (a lithography lib), so we ship as
+# "lethe-delete". The import package stays `lethe` (pip install lethe-delete;
+# import lethe) and the CLI commands stay `lethe` / `lethe-mcp`.
+name = "lethe-delete"
 version = "0.1.0"
 description = "The forget button for AI — provable data-subject deletion for AI memory, with signed deletion certificates."
 readme = "README.md"
