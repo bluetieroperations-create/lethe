@@ -75,6 +75,14 @@ layer was genuinely erased AND at least one layer was found),
 `all_verified: false` is an honest record of a partial/failed deletion — do
 not treat it as proof of erasure.
 
+Certificate v2 (`schema: "lethe.cert/2"`) adds machine-checkable evidence an
+agent should read: `valid_until` (the absence is asserted only up to this time —
+re-verify past it), `declared_scope` (the stores that were in scope, so you can
+tell what was *not* checked), and per-layer `residual_count` + `verify_method`
+(the post-delete re-query result and the exact query behind `verified_absent`).
+`index_version` is a nullable slot for a store-native index fingerprint. The
+verifier is version-aware: older `lethe.cert/1` certificates still validate.
+
 `verified_absent` means Lethe re-queried the configured endpoint immediately
 after deleting and saw the records gone **at issue time** — it is not a
 guarantee against read replicas, caches, or asynchronous propagation. For

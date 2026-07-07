@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lethe:cert:v2",
+  "title": "Lethe deletion certificate v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "payload_hash", "signature", "public_key"],
+  "properties": {
+    "payload_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$" },
+    "public_key": { "type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "request_id", "subject_hash", "issued_at", "valid_until",
+        "lethe_version", "claim", "declared_scope", "all_verified",
+        "layers_found", "records_deleted", "all_layers_handled", "layers"
+      ],
+      "properties": {
+        "schema": { "const": "lethe.cert/2" },
+        "request_id": { "type": "string", "minLength": 1 },
+        "subject_hash": { "type": "string", "minLength": 1 },
+        "issued_at": { "type": "string", "minLength": 1 },
+        "valid_until": { "type": ["string", "null"], "minLength": 1 },
+        "lethe_version": { "type": "string", "minLength": 1 },
+        "claim": { "type": "string", "minLength": 1 },
+        "declared_scope": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "all_verified": { "type": "boolean" },
+        "layers_found": { "type": "integer", "minimum": 0 },
+        "records_deleted": { "type": "integer", "minimum": 0 },
+        "all_layers_handled": { "type": "boolean" },
+        "layers": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "store", "namespace", "deleted_count", "verified_absent",
+              "requested_count", "handled", "erased",
+              "residual_count", "verify_method", "index_version"
+            ],
+            "properties": {
+              "store": { "type": "string", "minLength": 1 },
+              "namespace": { "type": "string" },
+              "deleted_count": { "type": "integer", "minimum": 0 },
+              "verified_absent": { "type": "boolean" },
+              "requested_count": { "type": "integer", "minimum": 0 },
+              "handled": { "type": "boolean" },
+              "erased": { "type": "boolean" },
+              "residual_count": { "type": ["integer", "null"], "minimum": 0 },
+              "verify_method": { "type": ["string", "null"], "minLength": 1 },
+              "index_version": { "type": ["string", "null"], "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

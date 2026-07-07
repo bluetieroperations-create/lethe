@@ -15,33 +15,56 @@ from .certificate import canonical_payload_bytes
 from .signing import verify_signature
 
 
-@lru_cache(maxsize=1)
-def _load_schema() -> dict:
-    text = (
-        resources.files("lethe").joinpath("schemas/certificate-v1.json").read_text()
-    )
+# A certificate is meant to be verifiable forever, so newer verifiers must still
+# validate older certs. Each version has its own schema, selected by the cert's
+# declared payload.schema; the per-schema `const` pins a declared version to its
+# exact shape, so a cert can't claim v1 while carrying v2 fields (or vice versa).
+_SCHEMA_FILES = {
+    "lethe.cert/1": "schemas/certificate-v1.json",
+    "lethe.cert/2": "schemas/certificate-v2.json",
+}
+_LATEST = "lethe.cert/2"
+
+
+@lru_cache(maxsize=None)
+def _load_schema(version: str = _LATEST) -> dict:
+    text = resources.files("lethe").joinpath(_SCHEMA_FILES[version]).read_text()
     return json.loads(text)
 
 
-@lru_cache(maxsize=1)
-def _validator() -> jsonschema.Draft202012Validator:
-    return jsonschema.Draft202012Validator(_load_schema())
+@lru_cache(maxsize=None)
+def _validator(version: str = _LATEST) -> jsonschema.Draft202012Validator:
+    return jsonschema.Draft202012Validator(_load_schema(version))
 
 
-def load_schema() -> dict:
-    """Return the certificate v1 JSON Schema.
+def _version_of(data) -> str:
+    """Which schema version to validate `data` against, from its declared
+    payload.schema. Unknown/missing falls back to the latest — whose `const`
+    then rejects the mismatch — so a bogus version can never skip validation."""
+    if isinstance(data, dict):
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            v = payload.get("schema")
+            if isinstance(v, str) and v in _SCHEMA_FILES:
+                return v
+    return _LATEST
+
+
+def load_schema(version: str = _LATEST) -> dict:
+    """Return the certificate JSON Schema for `version` (default: latest).
 
     Returns a defensive deep copy: the cached schema dict is shared process-wide,
     so callers must never be handed the mutable original.
     """
-    return copy.deepcopy(_load_schema())
+    return copy.deepcopy(_load_schema(version))
 
 
 def schema_errors(data) -> list[str]:
+    validator = _validator(_version_of(data))
     return [
         f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
         for e in sorted(
-            _validator().iter_errors(data),
+            validator.iter_errors(data),
             key=lambda e: [str(x) for x in e.absolute_path],
         )
     ]
