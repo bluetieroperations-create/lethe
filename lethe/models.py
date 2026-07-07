@@ -24,6 +24,18 @@ class LayerResult:
     # A tagged store with no connector is recorded as unhandled, not silently
     # skipped or crashed mid-loop.
     handled: bool = True
+    # --- cert v2 verification evidence (None when unknown, e.g. an unhandled
+    # layer or a connector that only implements the boolean verify()). ---
+    # How many of the requested record_ids STILL matched at verify time. 0 is
+    # the negative-query result that backs verified_absent; a non-zero value is
+    # the residue a re-query found. This is the evidence, not just the boolean.
+    residual_count: int | None = None
+    # Machine/human descriptor of the verification actually performed (e.g. the
+    # re-query shape), so "verified_absent: true" is auditable, not asserted.
+    verify_method: str | None = None
+    # Store-native index/version fingerprint at verify time, if the connector
+    # can supply one, so the absence claim binds to a specific index state.
+    index_version: str | None = None
 
 
 @dataclass(frozen=True)

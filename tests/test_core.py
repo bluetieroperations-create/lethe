@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from lethe.audit import AuditLog
@@ -47,6 +49,38 @@ def test_forget_deletes_tagged_records_and_returns_valid_certificate(setup):
     assert cert.payload["all_verified"] is True
     assert cert.payload["layers"][0]["deleted_count"] == 2
     assert verify_certificate(cert, lethe.signer.public_key_b64()) is True
+
+
+def test_forget_certificate_carries_v2_evidence(setup):
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    lethe.tag("user-1", "pgvector", "test_vectors", "r2")
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    p = cert.payload
+
+    assert p["schema"] == "lethe.cert/2"
+    # valid_until is set from issued_at + the validity window, and is after it
+    assert p["valid_until"] is not None
+    assert p["valid_until"] > p["issued_at"]
+    # declared_scope names the configured connectors (the boundary drawn)
+    assert p["declared_scope"] == ["pgvector"]
+    # verify_detail supplied real evidence: a genuine erasure leaves 0 residual
+    layer = p["layers"][0]
+    assert layer["residual_count"] == 0
+    assert layer["verify_method"] and "pgvector" in layer["verify_method"]
+    assert verify_certificate(cert, lethe.signer.public_key_b64()) is True
+
+
+def test_forget_rejects_non_positive_validity_window(setup):
+    """A zero/negative valid_for must not mint a cert whose valid_until is at or
+    before issued_at — that is a self-nullifying trust artifact."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    with pytest.raises(ValueError):
+        lethe.forget("user-1", request_id="req-1", valid_for=timedelta(0))
+    with pytest.raises(ValueError):
+        lethe.forget("user-1", request_id="req-2", valid_for=timedelta(days=-1))
 
 
 def test_forget_writes_audit_entry_and_purges_ledger(setup):

@@ -101,22 +101,40 @@ assert verify_certificate(cert, trusted_public_key=PUBLISHED_PUBKEY)
 
 ## The certificate
 
-Ed25519-signed, tamper-evident, independently verifiable. It states exactly what
-happened and **scopes its claim honestly** — *"deleted across these retrieval
-layers and verified absent,"* never "perfectly erased everywhere" (backups and
-model weights are out of scope by definition). `verified_absent` means Lethe
-re-queried the configured endpoint immediately after deleting and saw the
-records gone *at issue time* — it is not a guarantee against read replicas,
-query caches, or asynchronous propagation (notably Pinecone, whose deletes are
-eventually consistent).
+Ed25519-signed, tamper-evident, independently verifiable (schema `lethe.cert/2`).
+It states exactly what happened and **scopes its claim honestly** — *"deleted
+across these retrieval layers and verified absent,"* never "perfectly erased
+everywhere" (backups and model weights are out of scope by definition).
+`verified_absent` means Lethe re-queried the configured endpoint immediately
+after deleting and saw the records gone *at issue time* — it is not a guarantee
+against read replicas, query caches, or asynchronous propagation (notably
+Pinecone, whose deletes are eventually consistent).
+
+The v2 certificate carries the **evidence**, not just the boolean:
+
+- **`valid_until`** — the absence is asserted from `issued_at` up to this time; a
+  deletion cert is not eternal, so re-verify past it (the underlying index can
+  change). Set the window with `Lethe(cert_validity=…)` or `forget(valid_for=…)`.
+- **`declared_scope`** — the stores Lethe was configured to sweep, so a reader can
+  see what was in scope *and infer what was not checked*.
+- per-layer **`residual_count`** + **`verify_method`** — how many records the
+  post-delete re-query still found (`0` backs `verified_absent`) and the exact
+  query that produced it. `index_version` is a nullable slot for a store-native
+  index fingerprint. Older `lethe.cert/1` certificates still verify.
 
 ```json
 {
+  "schema": "lethe.cert/2",
   "all_verified": true,
   "records_deleted": 2,
+  "valid_until": "2026-07-21T00:00:00+00:00",
+  "declared_scope": ["pgvector", "pinecone"],
   "layers": [{"store": "pgvector", "namespace": "docs",
-              "deleted_count": 2, "verified_absent": true, "erased": true}],
-  "claim": "Deleted across the listed retrieval layers and verified absent. ...",
+              "deleted_count": 2, "verified_absent": true, "erased": true,
+              "residual_count": 0,
+              "verify_method": "pgvector: SELECT count(*) WHERE id = ANY(:ids); n_ids=2",
+              "index_version": null}],
+  "claim": "Deleted across the listed retrieval layers and verified absent ...",
   "signature": "…", "public_key": "…"
 }
 ```

@@ -1,6 +1,8 @@
 import psycopg
 from psycopg import sql
 
+from .base import VerifyResult
+
 
 class PgVectorConnector:
     name = "pgvector"
@@ -22,12 +24,18 @@ class PgVectorConnector:
         return n
 
     def verify(self, namespace: str, record_ids: list[str]) -> bool:
+        return self.verify_detail(namespace, record_ids).absent
+
+    def verify_detail(self, namespace: str, record_ids: list[str]) -> VerifyResult:
+        method = f"pgvector: SELECT count(*) WHERE {self.id_column} = ANY(:ids); n_ids={len(record_ids)}"
         if not record_ids:
-            return True
+            return VerifyResult(absent=True, residual_count=0, method=method, index_version=None)
         query = sql.SQL("SELECT count(*) FROM {tbl} WHERE {col} = ANY(%s)").format(
             tbl=sql.Identifier(namespace), col=sql.Identifier(self.id_column)
         )
         with self.conn.cursor() as cur:
             cur.execute(query, (record_ids,))
             (count,) = cur.fetchone()
-        return count == 0
+        return VerifyResult(
+            absent=count == 0, residual_count=int(count), method=method, index_version=None
+        )

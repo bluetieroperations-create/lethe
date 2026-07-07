@@ -1,6 +1,6 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .audit import AuditLog
 from .certificate import build_certificate
@@ -21,12 +21,17 @@ class Lethe:
         signer: Signer,
         connectors: dict[str, Connector],
         salt: str,
+        cert_validity: timedelta = timedelta(days=30),
     ):
         self.ledger = ledger
         self.audit = audit
         self.signer = signer
         self.connectors = connectors
         self.salt = salt
+        # Default window after issue during which a certificate's absence claim
+        # is asserted; past valid_until a reader should re-verify. Operator
+        # policy — override per-call with forget(valid_for=...).
+        self.cert_validity = cert_validity
 
     def _subject_hash(self, subject_id: str) -> str:
         return hash_subject(subject_id, self.salt)
@@ -62,10 +67,18 @@ class Lethe:
         *,
         request_id: str | None = None,
         now: datetime | None = None,
+        valid_for: timedelta | None = None,
     ) -> Certificate:
         subject_hash = self._subject_hash(subject_id)
         request_id = request_id or str(uuid.uuid4())
-        issued_at = (now or datetime.now(timezone.utc)).isoformat()
+        now_dt = now if now is not None else datetime.now(timezone.utc)
+        issued_at = now_dt.isoformat()
+        # NB: `valid_for or self.cert_validity` is WRONG — timedelta(0) is falsy,
+        # so an explicit zero/near-zero window would silently coalesce to the
+        # default. Select with `is None` so an explicit window is honored and a
+        # non-positive one reaches build_certificate's guard (which rejects it).
+        window = valid_for if valid_for is not None else self.cert_validity
+        valid_until = (now_dt + window).isoformat()
 
         groups: dict[tuple[str, str], list[str]] = defaultdict(list)
         for row in self.ledger.lookup(subject_hash):
@@ -105,7 +118,17 @@ class Lethe:
                 )
                 continue
             deleted = connector.delete(namespace, ids)
-            verified = connector.verify(namespace, ids)
+            # Prefer verify_detail (records the residual count + query descriptor
+            # as certifiable evidence); fall back to the boolean verify() for
+            # custom connectors that only implement the required Protocol.
+            if hasattr(connector, "verify_detail"):
+                vr = connector.verify_detail(namespace, ids)
+                verified, residual, method, idx_ver = (
+                    vr.absent, vr.residual_count, vr.method, vr.index_version
+                )
+            else:
+                verified = connector.verify(namespace, ids)
+                residual, method, idx_ver = None, "boolean-verify (no verify_detail)", None
             layers.append(
                 LayerResult(
                     store,
@@ -114,6 +137,9 @@ class Lethe:
                     verified_absent=verified,
                     requested_count=len(ids),
                     handled=True,
+                    residual_count=residual,
+                    verify_method=method,
+                    index_version=idx_ver,
                 )
             )
 
@@ -124,6 +150,11 @@ class Lethe:
             issued_at=issued_at,
             version=__version__,
             signer=self.signer,
+            valid_until=valid_until,
+            # The boundary the issuer drew: every store Lethe was configured to
+            # sweep. A tagged store missing a connector is still recorded (as an
+            # unhandled layer); declared_scope names the full configured set.
+            declared_scope=list(self.connectors.keys()),
         )
 
         self.audit.append(

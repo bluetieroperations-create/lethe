@@ -27,13 +27,23 @@ if DATABASE_URL:
     os.environ["LETHE_TEST_DATABASE_URL"] = DATABASE_URL
 
 
+class _ScrubbedConnection(psycopg.Connection):
+    """A real psycopg connection whose repr never carries the DSN. When a DB
+    test fails, pytest prints its fixture/local values — the default connection
+    repr would leak the Neon host/user/db into the failure output (and CI logs).
+    This subclass changes only __repr__; every connection method is unchanged."""
+
+    def __repr__(self) -> str:
+        return f"<lethe test Connection [{'closed' if self.closed else 'open'}] dsn=***scrubbed***>"
+
+
 @pytest.fixture
 def conn():
     if not DATABASE_URL:
         pytest.skip(
             "Set LETHE_TEST_DATABASE_URL to your Neon dev connection string to run DB tests."
         )
-    with psycopg.connect(DATABASE_URL) as c:
+    with _ScrubbedConnection.connect(DATABASE_URL) as c:
         with c.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS lethe_provenance, lethe_audit CASCADE")
             cur.execute("DROP TABLE IF EXISTS test_vectors CASCADE")

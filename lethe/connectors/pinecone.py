@@ -16,6 +16,8 @@ Three Pinecone realities shape this connector:
     do not read a Pinecone ``verified_absent: true`` as a cross-replica proof.
 """
 
+from .base import VerifyResult
+
 # Pinecone caps ids per delete/fetch call; chunk to stay under it.
 _BATCH = 1000
 
@@ -51,9 +53,18 @@ class PineconeConnector:
         return len(existing)
 
     def verify(self, namespace: str, record_ids: list[str]) -> bool:
+        return self.verify_detail(namespace, record_ids).absent
+
+    def verify_detail(self, namespace: str, record_ids: list[str]) -> VerifyResult:
+        # Count every residual id (do NOT short-circuit) so the certificate
+        # records the true residue. Absence here is at-issue-time against this
+        # endpoint only — Pinecone is eventually consistent (see module docstring).
+        method = f"pinecone: fetch(ids) then count residue; n_ids={len(record_ids)}; eventually-consistent"
         if not record_ids:
-            return True
+            return VerifyResult(absent=True, residual_count=0, method=method, index_version=None)
+        residual = 0
         for chunk in _chunks(record_ids, _BATCH):
-            if _fetched_ids(self.index.fetch(ids=list(chunk), namespace=namespace)):
-                return False
-        return True
+            residual += len(_fetched_ids(self.index.fetch(ids=list(chunk), namespace=namespace)))
+        return VerifyResult(
+            absent=residual == 0, residual_count=residual, method=method, index_version=None
+        )

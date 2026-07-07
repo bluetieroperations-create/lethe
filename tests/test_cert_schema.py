@@ -1,7 +1,60 @@
+import hashlib
+
 from lethe.cert_schema import schema_errors, verify_certificate_json
-from lethe.certificate import build_certificate, certificate_to_dict
+from lethe.certificate import build_certificate, canonical_payload_bytes, certificate_to_dict
 from lethe.models import LayerResult
 from lethe.signing import Signer
+
+
+def _v1_payload() -> dict:
+    """A genuine v1 payload, exactly matching schemas/certificate-v1.json (no v2
+    fields). Hand-built because build_certificate now always emits v2."""
+    return {
+        "schema": "lethe.cert/1",
+        "request_id": "req-1", "subject_hash": "subjA",
+        "issued_at": "2026-06-21T00:00:00+00:00", "lethe_version": "0.1.0",
+        "claim": "legacy v1 claim", "all_verified": True, "layers_found": 1,
+        "records_deleted": 1, "all_layers_handled": True,
+        "layers": [{
+            "store": "pgvector", "namespace": "docs", "deleted_count": 1,
+            "verified_absent": True, "requested_count": 1, "handled": True,
+            "erased": True,
+        }],
+    }
+
+
+def _signed_v1() -> tuple[dict, str]:
+    signer = Signer.generate()
+    payload = _v1_payload()
+    data = canonical_payload_bytes(payload)
+    cert = {
+        "payload": payload,
+        "payload_hash": hashlib.sha256(data).hexdigest(),
+        "signature": signer.sign(data),
+        "public_key": signer.public_key_b64(),
+    }
+    return cert, signer.public_key_b64()
+
+
+def test_v1_certificate_still_validates_and_verifies():
+    """Backward-compat: a v1 cert must still schema-validate AND cryptographically
+    verify under the version-aware verifier — 'verifiable forever'."""
+    cert, pub = _signed_v1()
+    assert schema_errors(cert) == []
+    assert verify_certificate_json(cert, trusted_public_key=pub) == {
+        "valid": True, "reasons": [], "detail": []
+    }
+
+
+def test_v1_declared_cert_carrying_v2_field_is_rejected():
+    """Downgrade-to-strip-evidence defense: a cert declaring schema v1 but
+    carrying a v2-only field must fail (v1 additionalProperties:false)."""
+    cert, pub = _signed_v1()
+    cert["payload"]["valid_until"] = "2099-01-01T00:00:00+00:00"  # v2-only field
+    assert schema_errors(cert) != []
+    assert verify_certificate_json(cert, trusted_public_key=pub)["reasons"] == [
+        "SCHEMA_MISMATCH"
+    ]
 
 
 def _golden() -> dict:

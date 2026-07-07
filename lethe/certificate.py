@@ -2,19 +2,24 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime
 
 from .models import Certificate, LayerResult
 from .signing import Signer, verify_signature
 
 CLAIM = (
     "Deleted across the listed retrieval layers and verified absent by re-query "
-    "at issue time against the configured endpoint. Not a guarantee of erasure "
-    "from backups, model weights, or systems outside Lethe's configured "
-    "connectors, nor a guarantee against read replicas, caches, or asynchronous "
-    "propagation (e.g. eventually-consistent stores such as Pinecone)."
+    "at issue time against the configured endpoint, recording the residual match "
+    "count for each layer. Scope is limited to the declared connectors "
+    "(declared_scope); a store not listed there was not checked. The absence is "
+    "asserted as of issued_at and is not asserted beyond valid_until (when set) — "
+    "re-verify after that time, as the underlying index can change. Not a "
+    "guarantee of erasure from backups, model weights, or systems outside Lethe's "
+    "configured connectors, nor a guarantee against read replicas, caches, or "
+    "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone)."
 )
 
-CERT_SCHEMA_VERSION = "lethe.cert/1"
+CERT_SCHEMA_VERSION = "lethe.cert/2"
 
 
 def _canonical_bytes(payload: dict) -> bytes:
@@ -29,7 +34,38 @@ def build_certificate(
     issued_at: str,
     version: str,
     signer: Signer,
+    valid_until: str | None = None,
+    declared_scope: list[str] | None = None,
 ) -> Certificate:
+    # The absence claim is asserted from issued_at up to valid_until. A
+    # valid_until at or before issued_at is a self-nullifying window: the cert
+    # would still sign and schema-validate, yet assert absence for a
+    # zero/negative interval. Refuse to mint such a trust artifact. (None is
+    # allowed — unbounded, discouraged, but scoped to issue time by the CLAIM.)
+    if valid_until is not None:
+        try:
+            issued_dt = datetime.fromisoformat(issued_at)
+            valid_dt = datetime.fromisoformat(valid_until)
+        except ValueError as exc:
+            raise ValueError(
+                "issued_at and valid_until must be ISO-8601 timestamps"
+            ) from exc
+        # Both naive or both aware compare cleanly; a naive/aware mix is itself a
+        # bug (inconsistent clocks) and TypeError surfaces it rather than hiding
+        # it — normalize to an explicit, honest error.
+        try:
+            ordered_ok = valid_dt > issued_dt
+        except TypeError as exc:
+            raise ValueError(
+                "issued_at and valid_until must both be timezone-aware or both "
+                "naive; a mixed pair is ambiguous"
+            ) from exc
+        if not ordered_ok:
+            raise ValueError(
+                f"valid_until ({valid_until}) must be strictly after issued_at "
+                f"({issued_at}); a non-positive validity window is not certifiable"
+            )
+
     ordered = sorted(layers, key=lambda l: (l.store, l.namespace))
 
     def _is_erasure(l: LayerResult) -> bool:
@@ -54,8 +90,14 @@ def build_certificate(
         "request_id": request_id,
         "subject_hash": subject_hash,
         "issued_at": issued_at,
+        # Time after which the absence is no longer asserted (re-verify past it).
+        # None => unbounded (discouraged; the CLAIM still scopes to issue time).
+        "valid_until": valid_until,
         "lethe_version": version,
         "claim": CLAIM,
+        # The boundary the issuer drew: stores Lethe was configured to sweep, so
+        # a reader can see what was in scope — and infer what was NOT checked.
+        "declared_scope": sorted(declared_scope or []),
         "all_verified": all_verified,
         # Honest summary of what actually happened, so a zero-deletion or
         # unhandled-store outcome cannot be misread off the layer list.
@@ -71,6 +113,10 @@ def build_certificate(
                 "requested_count": l.requested_count,
                 "handled": l.handled,
                 "erased": erased,
+                # cert v2 verification evidence (nullable — see LayerResult).
+                "residual_count": l.residual_count,
+                "verify_method": l.verify_method,
+                "index_version": l.index_version,
             }
             for l, erased in zip(ordered, erasures)
         ],
@@ -117,7 +163,9 @@ def canonical_payload_bytes(payload: dict) -> bytes:
 
 
 def certificate_to_dict(cert: Certificate) -> dict:
-    """The wire/JSON envelope — matches schemas/certificate-v1.json."""
+    """The wire/JSON envelope (payload + hash + signature + key). The envelope
+    is version-independent; the payload's `schema` field names the cert version
+    (currently lethe.cert/2), which selects the JSON Schema at verify time."""
     return {
         "payload": cert.payload,
         "payload_hash": cert.payload_hash,
