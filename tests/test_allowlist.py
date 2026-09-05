@@ -8,6 +8,8 @@ library, and reconcile()'s remediation path able to write entries forget()
 would then honour. These tests pin that placement, not just the behaviour.
 """
 
+import os
+
 import pytest
 
 from lethe.audit import AuditLog
@@ -361,7 +363,11 @@ def test_cli_forget_honours_the_allowlist(tables, tmp_path, monkeypatch):
     key.write_bytes(Signer.generate().private_bytes())
     monkeypatch.setenv("LETHE_ALLOWED_NAMESPACES", "pgvector:documents")
 
-    dsn = tables.info.dsn
+    # NOT tables.info.dsn: psycopg strips the password from it, so the CLI
+    # cannot authenticate anywhere the database needs one. That passes on a
+    # trust-auth local Postgres and fails in CI — use the configured DSN, as
+    # test_cli.py does.
+    dsn = os.environ["LETHE_TEST_DATABASE_URL"]
     result = CliRunner().invoke(
         cli,
         ["forget", "attacker", "--database-url", dsn, "--salt", "s",
