@@ -1,5 +1,7 @@
 # Lethe — the forget button for AI
 
+[![CI](https://github.com/bluetieroperations-create/lethe/actions/workflows/ci.yml/badge.svg)](https://github.com/bluetieroperations-create/lethe/actions/workflows/ci.yml)
+
 **Everyone built AI memory. Nobody built the provable delete.** Lethe deletes a
 person's data from your AI memory (vector store, RAG index, caches, logs) on a
 GDPR/CCPA request — and hands you a **signed certificate** proving it happened.
@@ -7,11 +9,12 @@ GDPR/CCPA request — and hands you a **signed certificate** proving it happened
 Self-hosted: Lethe runs inside *your* infrastructure. The tool that erases your
 data never becomes a new place your data goes.
 
-> **Status:** v0.1, early but real. Connectors: **pgvector** + **Pinecone**.
+> **Status:** v0.2, early but real. Connectors: **pgvector** + **Pinecone**.
 > The full delete loop is tested end-to-end against real Postgres (pgvector);
 > the Pinecone connector is unit-tested against a mock `Index`, not live
 > Pinecone. Hardened through four rounds of adversarial self-review (internal,
-> not third-party). Not yet on PyPI.
+> not third-party). Not published to PyPI yet — install from source (see
+> Quickstart).
 
 ---
 
@@ -181,7 +184,7 @@ operator's published public key to pin against). Full guide:
 - **Coverage = what flows through Lethe.** Writes that bypass the wrapper/`tag`
   aren't tracked. Wrap your store, or tag explicitly.
 - **Pre-existing data** (written before you adopted Lethe) needs retroactive
-  discovery — on the roadmap, not in v0.1.
+  discovery — on the roadmap, not in v0.2.
 - **Not erasure from backups or model weights.** Out of scope by design; the
   certificate says so.
 
