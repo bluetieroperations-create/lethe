@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    # The suite's DB tests run against a stock Postgres — PgVectorConnector
+    # addresses rows by id column, so no pgvector extension is required.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lethe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test
+        env:
+          LETHE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lethe_test
+        run: python -m pytest -q -ra --junitxml=junit.xml
+
+      # A green check that silently skipped the DB half of the suite would
+      # overstate what CI proved. Every test must actually run.
+      - name: No tests were skipped
+        if: always()
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          suite = ET.parse("junit.xml").getroot().find("testsuite")
+          skipped, tests = int(suite.get("skipped")), int(suite.get("tests"))
+          print(f"{tests} tests, {skipped} skipped")
+          if skipped:
+              sys.exit(f"{skipped} test(s) skipped — CI must exercise the full suite.")
+          PY
