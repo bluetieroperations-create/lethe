@@ -17,7 +17,16 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
 ]
-dependencies = ["psycopg[binary]>=3.1", "cryptography>=42", "click>=8.1"]
+dependencies = [
+    "psycopg[binary]>=3.1",
+    "cryptography>=42",
+    "click>=8.1",
+    # Required, not optional: lethe/cert_schema.py imports it at module
+    # level, and that module is the documented way to verify a certificate
+    # programmatically. Shipping it as an extra made the published
+    # verification API unimportable on a plain install.
+    "jsonschema>=4.21",
+]
 
 [project.urls]
 Repository = "https://github.com/bluetieroperations-create/lethe"
@@ -25,7 +34,7 @@ Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/do
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2", "ruff>=0.6", "mypy>=1.11", "asn1crypto>=1.5"]
-mcp = ["mcp>=1.9,<2", "jsonschema>=4.21"]
+mcp = ["mcp>=1.9,<2"]
 # RFC 3161 external anchoring. Optional: Lethe runs without it, unanchored.
 anchor = ["asn1crypto>=1.5"]
 

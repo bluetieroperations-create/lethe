@@ -31,6 +31,88 @@ jobs:
       - name: Mypy
         run: python -m mypy lethe
 
+  # Exactly what `pip install lethe-delete` gives a user: no extras, no dev
+  # dependencies. v0.3.0 shipped with the documented verification API
+  # (lethe.cert_schema) unimportable this way, because jsonschema was declared
+  # only under an extra. No unit test could catch it — the dev environment
+  # always has the extras installed, so the import always succeeded there.
+  base-install:
+    name: Base install (no extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install with no extras
+        run: python -m pip install .
+
+      - name: Documented public API must import
+        # Run from outside the checkout, so Python imports the INSTALLED
+        # package rather than the source tree — importing from the tree would
+        # succeed regardless of what the wheel declares, and mask the bug.
+        run: |
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import importlib
+
+          # Everything a user can reach without opting into an extra.
+          # lethe.mcp and lethe.anchor are deliberately absent: they require
+          # the [mcp] and [anchor] extras by design.
+          modules = [
+              "lethe",
+              "lethe.core",
+              "lethe.certificate",
+              "lethe.cert_schema",
+              "lethe.signing",
+              "lethe.ledger",
+              "lethe.audit",
+              "lethe.guard",
+              "lethe.hashing",
+              "lethe.models",
+              "lethe.cli",
+              "lethe.connectors.base",
+              "lethe.connectors.pgvector",
+              "lethe.connectors.pinecone",
+              "lethe.integrations.langchain",
+          ]
+          for name in modules:
+              importlib.import_module(name)
+              print("ok", name)
+          PY
+
+      - name: Certificate verification must work end to end
+        run: |
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import hashlib
+          from lethe.cert_schema import verify_certificate_json
+          from lethe.certificate import build_certificate, canonical_payload_bytes, certificate_to_dict
+          from lethe.models import LayerResult
+          from lethe.signing import Signer
+
+          signer = Signer.generate()
+          cert = certificate_to_dict(build_certificate(
+              request_id="r", subject_hash="s",
+              layers=[LayerResult("pgvector", "docs", 1, True, requested_count=1)],
+              issued_at="2026-09-05T00:00:00+00:00", version="0.3.1", signer=signer,
+          ))
+          pub = signer.public_key_b64()
+          assert verify_certificate_json(cert, trusted_public_key=pub)["valid"] is True
+          cert["payload"]["records_deleted"] = 9999
+          assert verify_certificate_json(cert, trusted_public_key=pub)["valid"] is False
+          print("verification works on a base install")
+          PY
+
+      - name: CLI must run
+        run: |
+          cd "$RUNNER_TEMP"
+          lethe --help > /dev/null
+          lethe verify --help > /dev/null
+          echo "CLI ok"
+
   test:
     runs-on: ubuntu-latest
     strategy:

@@ -9,6 +9,35 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.3.1] — 2026-09-05
+
+### Fixed
+
+- **The documented verification API was unimportable on a plain install.**
+  `lethe/cert_schema.py` imports `jsonschema` at module level, but the
+  dependency was declared only under the `dev` and `mcp` extras — so
+  `pip install lethe-delete` followed by
+  `from lethe.cert_schema import verify_certificate_json` raised
+  `ModuleNotFoundError`. That is the structured, machine-readable verification
+  path (the one returning `KEY_ID_MISMATCH` / `PAYLOAD_TAMPERED`), and
+  `docs/key-rotation.md` tells readers to call it. `jsonschema` is now a base
+  dependency: schema-validated verification is not an optional add-on for a
+  tool whose claim is that its certificates are independently verifiable.
+
+  The cryptographic path was unaffected — `lethe verify` and
+  `lethe.certificate.verify_certificate` worked throughout.
+
+### Added
+
+- **A `base-install` CI job** that installs the package with no extras and
+  imports every module a user can reach without opting in, then verifies a
+  certificate end to end. It runs from outside the checkout so Python loads the
+  installed package rather than the source tree — importing from the tree
+  succeeds regardless of what the wheel declares, which is precisely why this
+  slipped through. No unit test could have caught it: the dev environment
+  always has the extras installed. Confirmed to fail against v0.3.0 and pass
+  against this release.
+
 ## [0.3.0] — 2026-09-05
 
 Version 0.2.1 was prepared but never tagged or published; its contents are
@@ -127,5 +156,6 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
+[0.3.1]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.2.0
