@@ -346,7 +346,10 @@ def test_build_context_initializes_schema_on_fresh_db(tmp_path):
     # connection is the only one for the rest of the test.
     with _psycopg.connect(url) as c:
         with c.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS lethe_provenance, lethe_audit CASCADE")
+            cur.execute(
+                "DROP TABLE IF EXISTS lethe_provenance, lethe_audit, "
+                "lethe_retained_ids CASCADE"
+            )
         c.commit()
 
     key_file = tmp_path / "key.bin"

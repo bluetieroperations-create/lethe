@@ -66,6 +66,31 @@ def forget(subject_id: str, database_url: str, salt: str, key_file: str) -> None
     )
 
 
+@cli.command("reverify")
+@click.argument("subject_id")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+@click.option("--salt", envvar="LETHE_SALT", required=True)
+def reverify(subject_id: str, database_url: str, salt: str) -> None:
+    """Re-query the stores for a subject whose forget already completed.
+
+    A certificate asserts absence only up to valid_until. This re-checks it —
+    possible only where the deployment set retain_verification_ids, since the
+    default purge removes the record ids a re-query needs. Exits non-zero if
+    the subject's records are back, or if re-verification is not possible.
+    """
+    with psycopg.connect(database_url) as conn:
+        lethe = Lethe(
+            ledger=Ledger(conn),
+            audit=AuditLog(conn),
+            signer=Signer.generate(),  # unused: reverify never signs
+            connectors={"pgvector": PgVectorConnector(conn)},
+            salt=salt,
+        )
+        result = lethe.reverify(subject_id)
+    click.echo(json.dumps(result, indent=2))
+    raise SystemExit(0 if result["still_absent"] else 1)
+
+
 @cli.command("verify")
 @click.argument("cert_file")
 @click.option(

@@ -22,6 +22,7 @@ class Lethe:
         connectors: dict[str, Connector],
         salt: str,
         cert_validity: timedelta = timedelta(days=30),
+        retain_verification_ids: bool = False,
     ):
         self.ledger = ledger
         self.audit = audit
@@ -32,6 +33,12 @@ class Lethe:
         # is asserted; past valid_until a reader should re-verify. Operator
         # policy — override per-call with forget(valid_for=...).
         self.cert_validity = cert_validity
+        # Keep the deleted record ids so reverify() can re-query them after
+        # valid_until lapses. Off by default: the certificate advises
+        # re-verification, but retaining identifiers tied to a subject you just
+        # erased is a real privacy cost, so it is the operator's decision. The
+        # certificate records which way it was set.
+        self.retain_verification_ids = retain_verification_ids
 
     def _subject_hash(self, subject_id: str) -> str:
         return hash_subject(subject_id, self.salt)
@@ -160,6 +167,7 @@ class Lethe:
             # unhandled layer); declared_scope names the full configured set.
             declared_scope=list(self.connectors.keys()),
             audit_head=audit_head,
+            reverifiable=self.retain_verification_ids,
         )
 
         self.audit.append(
@@ -176,6 +184,74 @@ class Lethe:
         # Only purge the provenance map once deletion is fully verified — otherwise
         # we keep the map so the operation can be retried.
         if cert.payload["all_verified"]:
+            # Retention must happen BEFORE the purge it is copying from.
+            if self.retain_verification_ids:
+                self.ledger.retain_for_reverification(subject_hash, request_id)
             self.ledger.purge(subject_hash)
 
         return cert
+
+    def reverify(self, subject_id: str) -> dict:
+        """Re-query the stores for a subject whose forget already completed.
+
+        The certificate asserts absence only up to valid_until and advises
+        re-verifying past it. That is possible only when the deployment opted
+        into retain_verification_ids — otherwise forget() purged the record ids
+        a re-query would need, and this reports that honestly instead of
+        returning a hollow "absent" derived from having nothing to check.
+        """
+        subject_hash = self._subject_hash(subject_id)
+        retained = self.ledger.retained(subject_hash)
+        if not retained:
+            return {
+                "subject_hash": subject_hash,
+                "reverifiable": False,
+                "reason": (
+                    "no retained record ids for this subject — either no forget has "
+                    "completed, or the deployment did not set retain_verification_ids"
+                ),
+                "layers": [],
+                "still_absent": None,
+            }
+
+        groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for row in retained:
+            groups[(row.store, row.namespace)].append(row.record_id)
+
+        layers = []
+        for (store, namespace), ids in sorted(groups.items()):
+            connector = self.connectors.get(store)
+            if connector is None:
+                layers.append({
+                    "store": store, "namespace": namespace, "handled": False,
+                    "absent": None, "residual_count": None,
+                    "verify_method": None,
+                })
+                continue
+            if hasattr(connector, "verify_detail"):
+                vr = connector.verify_detail(namespace, ids)
+                absent, residual, method = vr.absent, vr.residual_count, vr.method
+            else:
+                absent = connector.verify(namespace, ids)
+                residual, method = None, "boolean-verify (no verify_detail)"
+            layers.append({
+                "store": store, "namespace": namespace, "handled": True,
+                "absent": absent, "residual_count": residual,
+                "verify_method": method,
+            })
+
+        # Unknown (an unhandled layer) must never read as absent.
+        still_absent = all(l["absent"] is True for l in layers) if layers else False
+        self.audit.append({
+            "event": "reverify",
+            "subject_hash": subject_hash,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "still_absent": still_absent,
+        })
+        return {
+            "subject_hash": subject_hash,
+            "reverifiable": True,
+            "reason": None,
+            "layers": layers,
+            "still_absent": still_absent,
+        }

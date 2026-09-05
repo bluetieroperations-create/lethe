@@ -42,7 +42,8 @@
         "layers",
         "key_id",
         "audit_head",
-        "timestamp"
+        "timestamp",
+        "reverifiable"
       ],
       "properties": {
         "schema": {
@@ -195,6 +196,9 @@
               "minLength": 1
             }
           }
+        },
+        "reverifiable": {
+          "type": "boolean"
         }
       }
     }

@@ -13,7 +13,9 @@ CLAIM = (
     "count for each layer. Scope is limited to the declared connectors "
     "(declared_scope); a store not listed there was not checked. The absence is "
     "asserted as of issued_at and is not asserted beyond valid_until (when set) — "
-    "re-verify after that time, as the underlying index can change. Not a "
+    "re-verify after that time, as the underlying index can change (possible only "
+    "where reverifiable is true; otherwise the issuer did not retain the record "
+    "identifiers a re-query needs). Not a "
     "guarantee of erasure from backups, model weights, or systems outside Lethe's "
     "configured connectors, nor a guarantee against read replicas, caches, or "
     "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone). "
@@ -43,6 +45,7 @@ def build_certificate(
     declared_scope: list[str] | None = None,
     audit_head: str | None = None,
     timestamp: dict | None = None,
+    reverifiable: bool = False,
 ) -> Certificate:
     # The absence claim is asserted from issued_at up to valid_until. A
     # valid_until at or before issued_at is a self-nullifying window: the cert
@@ -120,6 +123,12 @@ def build_certificate(
         # outside the issuer has attested to the time — the honest default,
         # carried in the signed payload rather than left to the reader.
         "timestamp": timestamp,
+        # Whether the issuer retained what a later re-query needs. The claim
+        # advises re-verifying past valid_until; by default forget() purges the
+        # provenance map (data minimisation), which destroys the record ids that
+        # re-query requires. Saying so in the payload keeps the advice from
+        # being something the certificate cannot actually support.
+        "reverifiable": reverifiable,
         "all_verified": all_verified,
         # Honest summary of what actually happened, so a zero-deletion or
         # unhandled-store outcome cannot be misread off the layer list.

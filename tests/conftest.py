@@ -45,7 +45,10 @@ def conn():
         )
     with _ScrubbedConnection.connect(DATABASE_URL) as c:
         with c.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS lethe_provenance, lethe_audit CASCADE")
+            cur.execute(
+                "DROP TABLE IF EXISTS lethe_provenance, lethe_audit, "
+                "lethe_retained_ids CASCADE"
+            )
             cur.execute("DROP TABLE IF EXISTS test_vectors CASCADE")
         c.commit()
         yield c
