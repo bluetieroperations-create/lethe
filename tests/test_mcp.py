@@ -1,6 +1,7 @@
 """Handler-level tests: real Ledger/AuditLog on the test DB, fake vector store.
 The MCP transport layer is tested separately (registration + e2e)."""
 
+import asyncio
 import os
 
 import pytest
@@ -11,7 +12,10 @@ from lethe.core import Lethe
 from lethe.guard import ConfirmGuard
 from lethe.ledger import Ledger
 from lethe.mcp import (
+    ConfigError,
     ServerContext,
+    build_context,
+    create_server,
     h_forget,
     h_forget_preview,
     h_status,
@@ -244,15 +248,14 @@ def test_verify_only_refuses_all_write_and_read_paths():
 
 
 def test_verify_certificate_schema_mismatch_through_handler(ctx):
-    r = h_verify_certificate(ctx, {"payload": {}, "payload_hash": "zz", "signature": "a", "public_key": "b"})
+    r = h_verify_certificate(
+        ctx,
+        {"payload": {}, "payload_hash": "zz", "signature": "a", "public_key": "b"},
+    )
     assert r["ok"] is True
     assert r["valid"] is False
     assert r["reasons"] == ["SCHEMA_MISMATCH"]
 
-
-import asyncio
-
-from lethe.mcp import ConfigError, build_context, create_server
 
 
 def test_create_server_registers_six_tools_with_honest_annotations():
@@ -376,9 +379,8 @@ def test_handler_recovers_after_sql_error(ctx):
     ctx.lethe.ledger.init_schema()  # tables exist; isolate the fault we inject
     ctx.lethe.audit.init_schema()
     import psycopg as _psycopg
-    with pytest.raises(_psycopg.errors.UndefinedTable):
-        with ctx.lethe.ledger.conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM does_not_exist_xyz")
+    with pytest.raises(_psycopg.errors.UndefinedTable), ctx.lethe.ledger.conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM does_not_exist_xyz")
     # The transaction is now aborted. The next handler hits it, returns a clean
     # envelope (not a raw psycopg crash), and rolls back in the error path...
     poisoned = h_status(ctx)

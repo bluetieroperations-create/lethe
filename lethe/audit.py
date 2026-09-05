@@ -78,6 +78,4 @@ class AuditLog:
             if _entry_hash(prev_hash, entry) != entry_hash:
                 return False
             prev = entry_hash
-        if expected_head is not None and not hmac.compare_digest(prev, expected_head):
-            return False
-        return True
+        return expected_head is None or hmac.compare_digest(prev, expected_head)

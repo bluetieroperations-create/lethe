@@ -76,17 +76,17 @@ def build_certificate(
                 f"({issued_at}); a non-positive validity window is not certifiable"
             )
 
-    ordered = sorted(layers, key=lambda l: (l.store, l.namespace))
+    ordered = sorted(layers, key=lambda layer: (layer.store, layer.namespace))
 
-    def _is_erasure(l: LayerResult) -> bool:
+    def _is_erasure(layer: LayerResult) -> bool:
         # A layer is a genuine, certifiable erasure only when Lethe was handled
         # by a real connector, confirmed the records absent, AND actually removed
         # records this run. deleted_count 0 with verified_absent True means the
         # data was already gone (another subject's forget, or a prior partial
         # run) — Lethe did NOT perform this erasure and must not certify it.
-        return l.handled and l.verified_absent and l.deleted_count > 0
+        return layer.handled and layer.verified_absent and layer.deleted_count > 0
 
-    erasures = [_is_erasure(l) for l in ordered]
+    erasures = [_is_erasure(layer) for layer in ordered]
 
     # all_verified is the load-bearing claim a regulator relies on. It is True
     # ONLY if at least one layer was found AND every layer is a genuine erasure.
@@ -133,23 +133,23 @@ def build_certificate(
         # Honest summary of what actually happened, so a zero-deletion or
         # unhandled-store outcome cannot be misread off the layer list.
         "layers_found": len(ordered),
-        "records_deleted": sum(l.deleted_count for l in ordered),
-        "all_layers_handled": all(l.handled for l in ordered) if ordered else True,
+        "records_deleted": sum(layer.deleted_count for layer in ordered),
+        "all_layers_handled": all(layer.handled for layer in ordered) if ordered else True,
         "layers": [
             {
-                "store": l.store,
-                "namespace": l.namespace,
-                "deleted_count": l.deleted_count,
-                "verified_absent": l.verified_absent,
-                "requested_count": l.requested_count,
-                "handled": l.handled,
+                "store": layer.store,
+                "namespace": layer.namespace,
+                "deleted_count": layer.deleted_count,
+                "verified_absent": layer.verified_absent,
+                "requested_count": layer.requested_count,
+                "handled": layer.handled,
                 "erased": erased,
                 # cert v2 verification evidence (nullable — see LayerResult).
-                "residual_count": l.residual_count,
-                "verify_method": l.verify_method,
-                "index_version": l.index_version,
+                "residual_count": layer.residual_count,
+                "verify_method": layer.verify_method,
+                "index_version": layer.index_version,
             }
-            for l, erased in zip(ordered, erasures)
+            for layer, erased in zip(ordered, erasures, strict=True)
         ],
     }
     data = _canonical_bytes(payload)
@@ -187,11 +187,10 @@ def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
     # other than the one that actually signed it. Only v3+ carries the field;
     # older certs legitimately have none.
     declared_kid = cert.payload.get("key_id")
-    if declared_kid is not None:
-        if not hmac.compare_digest(
-            declared_kid.encode(), key_id_for(cert.public_key).encode()
-        ):
-            return False
+    if declared_kid is not None and not hmac.compare_digest(
+        declared_kid.encode(), key_id_for(cert.public_key).encode()
+    ):
+        return False
 
     data = _canonical_bytes(cert.payload)
     if hashlib.sha256(data).hexdigest() != cert.payload_hash:

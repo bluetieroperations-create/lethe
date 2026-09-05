@@ -72,7 +72,7 @@ def test_layers_are_canonically_ordered():
         request_id="r", subject_hash="s", layers=unordered,
         issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
     )
-    namespaces = [l["namespace"] for l in cert.payload["layers"]]
+    namespaces = [lyr["namespace"] for lyr in cert.payload["layers"]]
     assert namespaces == ["a", "z"]
 
 

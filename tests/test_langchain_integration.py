@@ -283,7 +283,7 @@ class ReorderingInner(PgInner):
     def add_documents(self, documents, ids=None, **kwargs):
         used = ids if ids is not None else [f"auto{i}" for i in range(len(documents))]
         with self.conn.cursor() as cur:
-            for d, rid in zip(documents, used):
+            for d, rid in zip(documents, used, strict=True):
                 cur.execute(
                     f"INSERT INTO {self.table} (id, body) VALUES (%s, %s)",
                     (rid, d.page_content),
@@ -364,7 +364,7 @@ class UpsertInner(PgInner):
     def add_documents(self, documents, ids=None, **kwargs):
         used = ids if ids is not None else [f"a{i}" for i in range(len(documents))]
         with self.conn.cursor() as cur:
-            for d, rid in zip(documents, used):
+            for d, rid in zip(documents, used, strict=True):
                 cur.execute(
                     f"INSERT INTO {self.table} (id, body) VALUES (%s,%s) "
                     f"ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body",

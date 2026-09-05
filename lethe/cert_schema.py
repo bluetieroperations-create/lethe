@@ -6,14 +6,13 @@ import copy
 import hashlib
 import hmac as hmac_mod
 import json
-from functools import lru_cache
+from functools import cache
 from importlib import resources
 
 import jsonschema
 
 from .certificate import canonical_payload_bytes
 from .signing import key_id_for, verify_signature
-
 
 # A certificate is meant to be verifiable forever, so newer verifiers must still
 # validate older certs. Each version has its own schema, selected by the cert's
@@ -27,13 +26,13 @@ _SCHEMA_FILES = {
 _LATEST = "lethe.cert/3"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _load_schema(version: str = _LATEST) -> dict:
     text = resources.files("lethe").joinpath(_SCHEMA_FILES[version]).read_text()
     return json.loads(text)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _validator(version: str = _LATEST) -> jsonschema.Draft202012Validator:
     return jsonschema.Draft202012Validator(_load_schema(version))
 

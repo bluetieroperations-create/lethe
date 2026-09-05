@@ -1,6 +1,6 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from .audit import AuditLog
 from .certificate import build_certificate
@@ -78,7 +78,7 @@ class Lethe:
     ) -> Certificate:
         subject_hash = self._subject_hash(subject_id)
         request_id = request_id or str(uuid.uuid4())
-        now_dt = now if now is not None else datetime.now(timezone.utc)
+        now_dt = now if now is not None else datetime.now(UTC)
         issued_at = now_dt.isoformat()
         # NB: `valid_for or self.cert_validity` is WRONG — timedelta(0) is falsy,
         # so an explicit zero/near-zero window would silently coalesce to the
@@ -241,11 +241,11 @@ class Lethe:
             })
 
         # Unknown (an unhandled layer) must never read as absent.
-        still_absent = all(l["absent"] is True for l in layers) if layers else False
+        still_absent = all(lyr["absent"] is True for lyr in layers) if layers else False
         self.audit.append({
             "event": "reverify",
             "subject_hash": subject_hash,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
             "still_absent": still_absent,
         })
         return {
@@ -316,11 +316,11 @@ class Lethe:
                 "untracked": untracked,
             })
 
-        all_scanned = all(l["scanned"] for l in layers) if layers else False
+        all_scanned = all(lyr["scanned"] for lyr in layers) if layers else False
         self.audit.append({
             "event": "reconcile",
             "subject_hash": subject_hash,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
             "targets": len(targets),
             "untracked_found": total_untracked,
             "tagged": bool(tag_untracked and total_untracked),

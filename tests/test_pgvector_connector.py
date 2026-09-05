@@ -46,7 +46,7 @@ def test_empty_ids_are_noops(vectors):
 def test_namespace_is_safely_quoted(vectors):
     # A malicious namespace must not execute as SQL; it should error as a missing table.
     c = PgVectorConnector(vectors)
-    with pytest.raises(Exception):
+    with pytest.raises(psycopg.errors.UndefinedTable):
         c.delete("test_vectors; DROP TABLE test_vectors", ["r1"])
     vectors.rollback()
     with vectors.cursor() as cur:

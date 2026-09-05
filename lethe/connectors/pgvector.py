@@ -27,7 +27,10 @@ class PgVectorConnector:
         return self.verify_detail(namespace, record_ids).absent
 
     def verify_detail(self, namespace: str, record_ids: list[str]) -> VerifyResult:
-        method = f"pgvector: SELECT count(*) WHERE {self.id_column} = ANY(:ids); n_ids={len(record_ids)}"
+        method = (
+            f"pgvector: SELECT count(*) WHERE {self.id_column} = ANY(:ids); "
+            f"n_ids={len(record_ids)}"
+        )
         if not record_ids:
             return VerifyResult(absent=True, residual_count=0, method=method, index_version=None)
         query = sql.SQL("SELECT count(*) FROM {tbl} WHERE {col} = ANY(%s)").format(
@@ -35,9 +38,12 @@ class PgVectorConnector:
         )
         with self.conn.cursor() as cur:
             cur.execute(query, (record_ids,))
-            (count,) = cur.fetchone()
+            row = cur.fetchone()
+        # SELECT count(*) always returns exactly one row; treat the impossible
+        # empty result as zero residue rather than crashing on None.
+        count = 0 if row is None else int(row[0])
         return VerifyResult(
-            absent=count == 0, residual_count=int(count), method=method, index_version=None
+            absent=count == 0, residual_count=count, method=method, index_version=None
         )
 
     def scan(self, namespace: str, subject_field: str, subject_value: str) -> list[str]:

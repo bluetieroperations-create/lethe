@@ -59,7 +59,10 @@ class PineconeConnector:
         # Count every residual id (do NOT short-circuit) so the certificate
         # records the true residue. Absence here is at-issue-time against this
         # endpoint only — Pinecone is eventually consistent (see module docstring).
-        method = f"pinecone: fetch(ids) then count residue; n_ids={len(record_ids)}; eventually-consistent"
+        method = (
+            f"pinecone: fetch(ids) then count residue; n_ids={len(record_ids)}; "
+            "eventually-consistent"
+        )
         if not record_ids:
             return VerifyResult(absent=True, residual_count=0, method=method, index_version=None)
         residual = 0

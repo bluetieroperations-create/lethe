@@ -24,7 +24,7 @@ Repository = "https://github.com/bluetieroperations-create/lethe"
 Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2"]
+dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2", "ruff>=0.6", "mypy>=1.11"]
 mcp = ["mcp>=1.9,<2", "jsonschema>=4.21"]
 
 [project.scripts]
@@ -43,3 +43,22 @@ lethe = ["schemas/*.json"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# A focused set: correctness (E/F), import order (I), modern syntax (UP),
+# likely-bug patterns (B), and comprehension/simplification hints (SIM/C4).
+# Deliberately NOT enabled:
+#   BLE001/S110 — Lethe catches broadly on purpose where ANY failure must read
+#     as "verification failed" (signature checks, key decoding). Enforcing them
+#     would require noqa at every security-critical catch, which is worse.
+#   RUF059 — flags intentionally-unpacked-but-unused values in tests.
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
