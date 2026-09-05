@@ -52,6 +52,9 @@ included here.
 - **`SECURITY.md`** — private vulnerability reporting and scope.
 - **CI** — GitHub Actions on Python 3.11 and 3.12 against a real Postgres
   service, including a guard that fails the build if any test is skipped.
+- **CodeQL** — static analysis on pushes, pull requests, and weekly, using the
+  `security-extended` query suite. The weekly run matters as much as the diff
+  runs: new queries find issue classes in code that has not changed.
 - **Release workflow** — pushing a `v*` tag publishes the GitHub Release, with
   notes taken from this file. It refuses to publish if the tag disagrees with
   `lethe/version.py`, or if the changelog section is missing or still marked
