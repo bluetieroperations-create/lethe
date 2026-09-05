@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: python
           # security-extended over the default suite: this codebase's risk sits
@@ -38,6 +38,6 @@ jobs:
           queries: security-extended
 
       # No build step: CodeQL analyses Python from source.
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:python"
