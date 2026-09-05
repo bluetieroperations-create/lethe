@@ -1,6 +1,8 @@
 """Handler-level tests: real Ledger/AuditLog on the test DB, fake vector store.
 The MCP transport layer is tested separately (registration + e2e)."""
 
+import os
+
 import pytest
 
 from lethe.audit import AuditLog
@@ -18,6 +20,8 @@ from lethe.mcp import (
     h_verify_subject,
 )
 from lethe.signing import Signer
+
+DATABASE_URL = os.environ.get("LETHE_TEST_DATABASE_URL")
 
 
 class FakeStore:
@@ -305,6 +309,8 @@ def test_build_context_bad_key_file_fails_fast(tmp_path):
 
 
 def test_build_context_full_env(tmp_path):
+    if not DATABASE_URL:
+        pytest.skip("needs LETHE_TEST_DATABASE_URL")
     import os as _os
     key_file = tmp_path / "key.bin"
     key_file.write_bytes(Signer.generate().private_bytes())
@@ -329,6 +335,8 @@ def test_build_context_initializes_schema_on_fresh_db(tmp_path):
     of dying UndefinedTable. Deliberately does NOT take the `conn` fixture — a
     real single-process deployment has exactly ONE connection; holding a second
     open against Neon's transaction pooler makes cross-connection DDL flaky."""
+    if not DATABASE_URL:
+        pytest.skip("needs LETHE_TEST_DATABASE_URL")
     import os as _os
 
     import psycopg as _psycopg

@@ -3,7 +3,7 @@
 # "lethe-delete". The import package stays `lethe` (pip install lethe-delete;
 # import lethe) and the CLI commands stay `lethe` / `lethe-mcp`.
 name = "lethe-delete"
-version = "0.2.0"
+dynamic = ["version"]
 description = "The forget button for AI — provable data-subject deletion for AI memory, with signed deletion certificates."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,12 +24,15 @@ Repository = "https://github.com/bluetieroperations-create/lethe"
 Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9"]
-mcp = ["mcp>=1.9", "jsonschema>=4.21"]
+dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2"]
+mcp = ["mcp>=1.9,<2", "jsonschema>=4.21"]
 
 [project.scripts]
 lethe = "lethe.cli:cli"
 lethe-mcp = "lethe.mcp:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "lethe.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["lethe*"]
