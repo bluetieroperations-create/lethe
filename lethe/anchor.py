@@ -97,12 +97,32 @@ class Anchor(Protocol):
         ...
 
 
+class _SchemeCheckingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-apply the scheme allowlist to redirect targets.
+
+    Validating only the configured URL leaves a gap: urllib's default redirect
+    handler will follow a 3xx into ftp://, so an authority (or anything able to
+    answer for it) could move the request onto a scheme the allowlist was meant
+    to exclude. A TSA has no reason to redirect anywhere but http/https.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        scheme = urllib.parse.urlparse(newurl).scheme.lower()
+        if scheme not in _ALLOWED_SCHEMES:
+            raise AnchorError(
+                f"timestamping authority redirected to a {scheme or 'schemeless'!r} "
+                f"URL; only http and https are followed"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _http_post(url: str, body: bytes, timeout: float) -> bytes:
     request = urllib.request.Request(
         url, data=body, headers={"Content-Type": _CONTENT_TYPE}
     )
+    opener = urllib.request.build_opener(_SchemeCheckingRedirectHandler)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             body = response.read(_MAX_RESPONSE_BYTES + 1)
         if len(body) > _MAX_RESPONSE_BYTES:
             raise AnchorError(
@@ -201,21 +221,29 @@ class Rfc3161Anchor:
 
         try:
             info = response["time_stamp_token"]["content"]["encap_content_info"]["content"].parsed
+            # Every field is read inside the guard: these walk structures a
+            # remote authority controls, so an unexpected shape must surface as
+            # an AnchorError, never as a raw traceback out of the anchor call.
+            token_nonce = info["nonce"].native
+            token_imprint = info["message_imprint"]["hashed_message"].native
+            anchored_at = info["gen_time"].native.isoformat()
+            policy = info["policy"].native if info["policy"] else None
         except Exception as exc:
             raise AnchorError(
                 f"timestamping authority granted the request but returned an "
                 f"unparseable token ({type(exc).__name__})"
             ) from None
-        if info["nonce"].native != nonce:
+
+        if token_nonce != nonce:
             raise AnchorError("timestamp nonce mismatch — response is not for this request")
-        if info["message_imprint"]["hashed_message"].native != digest:
+        if token_imprint != digest:
             raise AnchorError("timestamp imprint mismatch — token covers different data")
 
         return AnchorResult(
             authority=self.url,
             token=base64.b64encode(raw).decode(),
-            anchored_at=info["gen_time"].native.isoformat(),
+            anchored_at=anchored_at,
             digest=digest.hex(),
             digest_algorithm=self.hash_algorithm,
-            policy=info["policy"].native if info["policy"] else None,
+            policy=policy,
         )

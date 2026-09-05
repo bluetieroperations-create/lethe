@@ -11,12 +11,13 @@ A live test against a real authority is in test_anchor_live.py.
 
 import base64
 import hashlib
+import urllib.request
 from datetime import UTC, datetime
 
 import pytest
 from asn1crypto import algos, cms, core, tsp
 
-from lethe.anchor import AnchorError, Rfc3161Anchor
+from lethe.anchor import AnchorError, Rfc3161Anchor, _TimeStampResp
 
 GEN_TIME = datetime(2026, 9, 5, 12, 0, 0, tzinfo=UTC)
 
@@ -147,6 +148,53 @@ def test_granted_response_with_a_broken_token_is_distinguishable():
     # status=granted (0), but no token follows.
     granted_bad_token = bytes([0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x00])
     anchor = Rfc3161Anchor("https://tsa.example/tsr", transport=lambda u, b: granted_bad_token)
+    with pytest.raises(AnchorError, match="unparseable token"):
+        anchor.anchor(b"the-audit-head")
+
+
+def test_redirect_to_a_disallowed_scheme_is_refused():
+    """Regression: the scheme allowlist covered the configured URL but not
+    redirect targets, and urllib will follow a 3xx into ftp://."""
+    from lethe.anchor import _SchemeCheckingRedirectHandler
+
+    handler = _SchemeCheckingRedirectHandler()
+    with pytest.raises(AnchorError, match="redirected"):
+        handler.redirect_request(None, None, 302, "Found", {}, "ftp://evil.example/x")
+
+
+def test_redirect_to_https_is_still_followed():
+    """The guard must not break a legitimate http -> https upgrade."""
+    from lethe.anchor import _SchemeCheckingRedirectHandler
+
+    handler = _SchemeCheckingRedirectHandler()
+    request = urllib.request.Request("http://tsa.example/tsr", data=b"x")
+    redirected = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://tsa.example/tsr"
+    )
+    assert redirected is not None
+    assert redirected.full_url == "https://tsa.example/tsr"
+
+
+def test_malformed_token_body_never_escapes_as_a_traceback():
+    """Regression: nonce/imprint/gen_time were read outside the guard, so a
+    token whose body is not TSTInfo raised a raw exception out of anchor()
+    instead of an AnchorError. Remote input must not escape uncaught."""
+    signed = cms.SignedData({
+        "version": "v3", "digest_algorithms": [],
+        "encap_content_info": cms.EncapsulatedContentInfo({
+            "content_type": "data",  # not tst_info
+            "content": core.ParsableOctetString(b"\x01\x02\x03"),
+        }),
+        "signer_infos": [],
+    })
+    raw = _TimeStampResp({
+        "status": tsp.PKIStatusInfo({"status": "granted"}),
+        "time_stamp_token": cms.ContentInfo(
+            {"content_type": "signed_data", "content": signed}
+        ),
+    }).dump()
+
+    anchor = Rfc3161Anchor("https://tsa.example/tsr", transport=lambda u, b: raw)
     with pytest.raises(AnchorError, match="unparseable token"):
         anchor.anchor(b"the-audit-head")
 
