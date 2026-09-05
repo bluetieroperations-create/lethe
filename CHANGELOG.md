@@ -9,6 +9,64 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.4.0] — 2026-09-05
+
+### Added
+
+- **Namespace allowlist** (#8). `lethe_tag` accepted a namespace straight from
+  its caller, so an agent driving the MCP server could direct a delete at any
+  table the configured database user could write — not only the stores Lethe
+  was set up to sweep. Confirmed by reproduction against v0.3.1: a single tag
+  call naming an unrelated table, then the ordinary preview/confirm/forget
+  sequence, deleted the row and produced a certificate reading
+  `all_verified: true`. The certificate was *honest*, which is what made it
+  hard to notice — nothing malfunctioned.
+
+  `Lethe(allowed_namespaces={"pgvector": {"documents"}})` and
+  `LETHE_ALLOWED_NAMESPACES=pgvector:documents,...` name the `(store,
+  namespace)` pairs a deployment may ever tag, and therefore ever delete from.
+
+  Enforced in `Lethe.tag`, **not** at the MCP boundary: the ledger is what
+  `forget()` deletes from, so guarding one entry point would leave the CLI, the
+  library and `reconcile(tag_untracked=True)` able to write entries `forget()`
+  would then honour. `reconcile` validates every target before scanning, so a
+  refusal cannot leave a partial remediation.
+
+  **`forget()` enforces it too**, not only `tag()`. A ledger row can predate
+  the allowlist, or be written by anything with SQL access to
+  `lethe_provenance`, and the delete path is the one that matters. A layer
+  outside the allowlist is recorded as unhandled — the same shape as a store
+  with no configured connector — so `all_verified` goes False and the
+  certificate reports that a layer was found and deliberately not swept, rather
+  than omitting it. Allowed layers in the same run are still swept; the ledger
+  is preserved so an operator can fix the configuration and retry.
+
+  **Unset means unrestricted**, preserving existing behaviour on upgrade — but
+  a value that is set and empty is a misconfiguration, not a way to say "allow
+  nothing", because running unrestricted due to a variable expanding to nothing
+  is the exact failure this control exists to prevent. `lethe_status` now
+  reports `namespace_allowlist` so an operator can see which mode they are in,
+  and MCP returns a `NAMESPACE_NOT_ALLOWED` envelope rather than an INTERNAL
+  traceback.
+
+- **`lethe ledger-scope`** — lists what the ledger holds against the configured
+  allowlist, and `--purge-disallowed` clears rows outside it (removing Lethe's
+  record that they exist; it does not delete from the store). Configuring an
+  allowlist does not retroactively clean the ledger, and a row tagged before it
+  existed blocks that subject from ever certifying again — so it has to be
+  visible and clearable. Exits non-zero while out-of-policy rows remain.
+
+### Fixed
+
+- `lethe forget` — the command that actually deletes — did not apply the
+  allowlist at all; it was wired into `reconcile` only.
+- `preview()` (and so `lethe_forget_preview`) did not mark layers that
+  `forget()` will refuse, so the confirm token was minted over a blast radius
+  that misstated what would happen. Layers now carry `allowed`.
+- `build_context` validated the allowlist only after opening a database
+  connection. Configuration is now checked before any side effect, so a
+  malformed allowlist fails startup rather than leaving a connection open.
+
 ## [0.3.1] — 2026-09-05
 
 ### Fixed
@@ -156,6 +214,7 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
+[0.4.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.4.0
 [0.3.1]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.2.0

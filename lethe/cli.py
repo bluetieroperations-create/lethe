@@ -1,4 +1,5 @@
 import json
+import os
 
 import click
 import psycopg
@@ -6,7 +7,7 @@ import psycopg
 from .audit import AuditLog
 from .certificate import verify_certificate
 from .connectors.pgvector import PgVectorConnector
-from .core import Lethe
+from .core import Lethe, NamespaceNotAllowed, parse_allowed_namespaces
 from .ledger import Ledger
 from .models import Certificate
 from .signing import Signer
@@ -15,6 +16,14 @@ from .signing import Signer
 @click.group()
 def cli() -> None:
     """Lethe — the forget button for AI."""
+
+
+def _allowed_namespaces():
+    """Shared by the CLI commands that can write to the ledger."""
+    try:
+        return parse_allowed_namespaces(os.environ.get("LETHE_ALLOWED_NAMESPACES"))
+    except ValueError as e:
+        raise SystemExit(f"lethe: {e}") from None
 
 
 @cli.command("keygen")
@@ -51,6 +60,10 @@ def forget(subject_id: str, database_url: str, salt: str, key_file: str) -> None
             signer=signer,
             connectors={"pgvector": PgVectorConnector(conn)},
             salt=salt,
+            # forget() is the command that deletes; it needs the allowlist more
+            # than any other entry point, and is the one an operator reaches
+            # for while cleaning up after discovering they were hit.
+            allowed_namespaces=_allowed_namespaces(),
         )
         cert = lethe.forget(subject_id)
     click.echo(
@@ -135,12 +148,73 @@ def reconcile(
             signer=Signer.generate(),  # unused: reconcile never signs
             connectors={"pgvector": PgVectorConnector(conn)},
             salt=salt,
+            allowed_namespaces=_allowed_namespaces(),
         )
-        result = lethe.reconcile(
-            subject_id, targets=parsed, tag_untracked=tag_untracked
-        )
+        try:
+            result = lethe.reconcile(
+                subject_id, targets=parsed, tag_untracked=tag_untracked
+            )
+        except NamespaceNotAllowed as e:
+            raise SystemExit(f"lethe: {e}") from None
     click.echo(json.dumps(result, indent=2))
     raise SystemExit(0 if result["clean"] else 1)
+
+
+@cli.command("ledger-scope")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+@click.option(
+    "--purge-disallowed",
+    is_flag=True,
+    help="Delete ledger rows outside the allowlist. Removes Lethe's record "
+    "that those rows exist; it does NOT delete anything from the store.",
+)
+def ledger_scope(database_url: str, purge_disallowed: bool) -> None:
+    """Show what the ledger holds, against the configured allowlist.
+
+    Configuring LETHE_ALLOWED_NAMESPACES does not retroactively clean the
+    ledger. A row tagged before the allowlist existed still blocks the subject
+    it belongs to from ever certifying again, because forget() records it as an
+    unhandled layer and all_verified stays false. Run this after configuring an
+    allowlist to find those rows. Exits non-zero if any are present.
+    """
+    allowed = _allowed_namespaces()
+
+    def _is_allowed(store: str, namespace: str) -> bool:
+        return allowed is None or namespace in allowed.get(store, set())
+
+    with psycopg.connect(database_url) as conn:
+        ledger = Ledger(conn)
+        rows = ledger.namespaces()
+        disallowed = [(s, n, c) for s, n, c in rows if not _is_allowed(s, n)]
+        purged = 0
+        if purge_disallowed:
+            for store, namespace, _ in disallowed:
+                purged += ledger.purge_namespace(store, namespace)
+        report = [
+            {
+                "store": store,
+                "namespace": namespace,
+                "rows": count,
+                "allowed": _is_allowed(store, namespace),
+            }
+            for store, namespace, count in rows
+        ]
+
+    click.echo(
+        json.dumps(
+            {
+                "allowlist": (
+                    None if allowed is None
+                    else sorted(f"{s}:{n}" for s, ns in allowed.items() for n in ns)
+                ),
+                "ledger": report,
+                "disallowed_rows": sum(c for _, _, c in disallowed),
+                "purged_rows": purged,
+            },
+            indent=2,
+        )
+    )
+    raise SystemExit(0 if not disallowed or purged else 1)
 
 
 @cli.command("verify")

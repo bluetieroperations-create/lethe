@@ -100,7 +100,9 @@ def test_preview_returns_counts_and_token(ctx):
     _seed_alice(ctx)
     r = h_forget_preview(ctx, "alice@x.com")
     assert r["ok"] is True
-    assert r["layers"] == [{"store": "fake", "namespace": "docs", "count": 2}]
+    assert r["layers"] == [
+        {"store": "fake", "namespace": "docs", "count": 2, "allowed": True}
+    ]
     assert r["confirm_token"].startswith("v1.")
 
 
@@ -424,7 +426,7 @@ def test_forget_through_mcp_deletes_real_pgvector_rows(conn):
 
     prev = h_forget_preview(ctx, "alice@real.test")
     assert prev["ok"] and prev["layers"] == [
-        {"store": "pgvector", "namespace": "mcp_real_vectors", "count": 2}
+        {"store": "pgvector", "namespace": "mcp_real_vectors", "count": 2, "allowed": True}
     ]
 
     result = h_forget(ctx, "alice@real.test", prev["confirm_token"])

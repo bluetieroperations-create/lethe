@@ -19,7 +19,7 @@ from .audit import AuditLog
 from .cert_schema import verify_certificate_json
 from .certificate import CERT_SCHEMA_VERSION, certificate_to_dict
 from .connectors.pgvector import PgVectorConnector
-from .core import Lethe
+from .core import Lethe, NamespaceNotAllowed, parse_allowed_namespaces
 from .guard import ConfirmGuard, GuardError
 from .hashing import hash_subject
 from .ledger import Ledger
@@ -119,10 +119,17 @@ def h_status(ctx: ServerContext) -> dict:
     }
     if ctx.verify_only:
         return _ok(mode="verify-only", connectors=[], **common)
+    allowed = ctx.store.allowed_namespaces
     return _ok(
         mode="full",
         connectors=sorted(ctx.store.connectors),
         audit_head=ctx.store.audit.head(),
+        # Surfaced so an operator can see at a glance that this deployment can
+        # be pointed at any table the database user can write.
+        namespace_allowlist=(
+            None if allowed is None
+            else sorted(f"{s}:{n}" for s, ns in allowed.items() for n in ns)
+        ),
         **common,
     )
 
@@ -131,7 +138,12 @@ def h_status(ctx: ServerContext) -> dict:
 def h_tag(ctx: ServerContext, subject_id: str, store: str, namespace: str, record_id: str) -> dict:
     if ctx.verify_only:
         return _verify_only_err()
-    ctx.store.tag(subject_id, store, namespace, record_id)
+    try:
+        ctx.store.tag(subject_id, store, namespace, record_id)
+    except NamespaceNotAllowed as e:
+        # A caller error with a named code, not an INTERNAL traceback: an agent
+        # should be able to branch on this rather than parse a message.
+        return _err(e.code, str(e))
     out = _ok(tagged={"store": store, "namespace": namespace, "record_id": record_id})
     if store not in ctx.store.connectors:
         out["warning"] = (
@@ -262,6 +274,16 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _allowed_or_config_error(raw: str | None) -> dict[str, set[str]] | None:
+    """Surface a malformed allowlist as a ConfigError, so main() reports it as
+    a clean startup message like every other misconfiguration."""
+    try:
+        return parse_allowed_namespaces(raw)
+    except ValueError as e:
+        raise ConfigError(str(e)) from None
+
+
+
 def build_context(environ=os.environ) -> ServerContext:
     """Full mode needs LETHE_DATABASE_URL (or DATABASE_URL) + LETHE_SALT +
     LETHE_KEY_FILE. With no database URL at all, the server starts in
@@ -279,6 +301,10 @@ def build_context(environ=os.environ) -> ServerContext:
             f"{'is' if len(missing) == 1 else 'are'} not — full mode needs both "
             "(unset LETHE_DATABASE_URL to run verify-only)"
         )
+    # Validated here, with the other config, so a malformed allowlist fails
+    # before any connection is opened rather than after.
+    allowed = _allowed_or_config_error(environ.get("LETHE_ALLOWED_NAMESPACES"))
+
     key_file = environ["LETHE_KEY_FILE"]
     try:
         with open(key_file, "rb") as f:
@@ -299,6 +325,7 @@ def build_context(environ=os.environ) -> ServerContext:
         signer=signer,
         connectors={"pgvector": PgVectorConnector(conn)},
         salt=environ["LETHE_SALT"],
+        allowed_namespaces=allowed,
     )
     # Self-initialize (idempotent CREATE IF NOT EXISTS): a fresh operator's
     # first tool call must work without a separate init-db step — without this

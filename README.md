@@ -171,6 +171,7 @@ proves far more against a third party than against the operator who issued it.
 | `lethe init-db` | Create Lethe's ledger + audit tables in your Postgres |
 | `lethe forget SUBJECT` | Delete a subject everywhere; prints the signed certificate |
 | `lethe verify CERT --public-key PUB` | Verify a certificate against the operator's published key |
+| `lethe ledger-scope` | Show what the ledger holds vs the allowlist; `--purge-disallowed` clears the rest |
 | `lethe reconcile SUBJECT --target STORE:NS:FIELD` | Ask the stores what they hold for a subject, vs what the ledger knows |
 | `lethe reverify SUBJECT` | Re-check absence after `valid_until` (needs `retain_verification_ids`) |
 | `lethe anchor` | Timestamp the audit head with an RFC 3161 authority (run on a schedule) |
@@ -213,6 +214,12 @@ operator's published public key to pin against). Full guide:
 - **Pre-existing data** (written before you adopted Lethe) is found by
   `lethe reconcile` where the store exposes a queryable subject field, and can
   be tagged for deletion with `--tag-untracked`.
+- **Restrict what a deployment may delete from.** `lethe_tag` takes a namespace
+  from its caller, so without an allowlist an agent driving the MCP server can
+  direct a delete at any table the database user can write. Set
+  `LETHE_ALLOWED_NAMESPACES=pgvector:documents,pgvector:chat_turns` (or
+  `Lethe(allowed_namespaces=…)`); `lethe status` reports whether a deployment is
+  running unrestricted. Unset means unrestricted, for backward compatibility.
 - **Self-attestation, unless you anchor.** The operator signs their own
   certificate and `issued_at` is their own clock. `lethe anchor` timestamps the
   audit head with an external RFC 3161 authority, which closes backdating; see

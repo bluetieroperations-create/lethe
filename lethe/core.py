@@ -12,6 +12,47 @@ from .signing import Signer
 from .version import __version__
 
 
+def parse_allowed_namespaces(raw: str | None) -> dict[str, set[str]] | None:
+    """Parse LETHE_ALLOWED_NAMESPACES: comma-separated STORE:NAMESPACE pairs.
+
+        pgvector:documents,pgvector:chat_turns,pinecone:memories
+
+    Returns None when unset — unrestricted, the pre-existing behaviour. An
+    empty or whitespace-only value is a misconfiguration rather than a way to
+    express "allow nothing": silently running unrestricted because a variable
+    expanded to nothing is exactly the failure this control exists to stop.
+    """
+    if raw is None:
+        return None
+    entries = [item.strip() for item in raw.split(",") if item.strip()]
+    if not entries:
+        raise ValueError(
+            "LETHE_ALLOWED_NAMESPACES is set but empty; unset it to run "
+            "unrestricted, or list STORE:NAMESPACE pairs"
+        )
+    allowed: dict[str, set[str]] = {}
+    for entry in entries:
+        store, sep, namespace = entry.partition(":")
+        if not sep or not store.strip() or not namespace.strip():
+            raise ValueError(
+                f"LETHE_ALLOWED_NAMESPACES entry {entry!r} must be STORE:NAMESPACE"
+            )
+        allowed.setdefault(store.strip(), set()).add(namespace.strip())
+    return allowed
+
+
+class NamespaceNotAllowed(Exception):
+    """tag() was asked to record a store/namespace outside the allowlist.
+
+    Enforced in Lethe.tag rather than at the MCP boundary on purpose: the
+    ledger is what forget() deletes from, so guarding only one entry point
+    would leave the CLI, the library and reconcile()'s remediation path able
+    to write entries that forget() would then honour.
+    """
+
+    code = "NAMESPACE_NOT_ALLOWED"
+
+
 class Lethe:
     def __init__(
         self,
@@ -23,6 +64,7 @@ class Lethe:
         salt: str,
         cert_validity: timedelta = timedelta(days=30),
         retain_verification_ids: bool = False,
+        allowed_namespaces: dict[str, set[str]] | None = None,
     ):
         self.ledger = ledger
         self.audit = audit
@@ -39,11 +81,38 @@ class Lethe:
         # erased is a real privacy cost, so it is the operator's decision. The
         # certificate records which way it was set.
         self.retain_verification_ids = retain_verification_ids
+        # Which (store, namespace) pairs this deployment may ever tag, and so
+        # ever delete from. None means unrestricted — the pre-existing
+        # behaviour, kept as the default so upgrading cannot silently start
+        # rejecting a deployment's real traffic. An operator running
+        # unrestricted can see so in `lethe status`.
+        self.allowed_namespaces = allowed_namespaces
 
     def _subject_hash(self, subject_id: str) -> str:
         return hash_subject(subject_id, self.salt)
 
+    def _namespace_allowed(self, store: str, namespace: str) -> bool:
+        if self.allowed_namespaces is None:
+            return True
+        return namespace in self.allowed_namespaces.get(store, set())
+
+    def _check_namespace(self, store: str, namespace: str) -> None:
+        if self._namespace_allowed(store, namespace):
+            return
+        # Reached only when an allowlist is configured, but bind it explicitly
+        # rather than relying on that invariant holding across a refactor of
+        # _namespace_allowed.
+        configured = self.allowed_namespaces or {}
+        allowed = sorted(f"{s}:{n}" for s, ns in configured.items() for n in ns)
+        raise NamespaceNotAllowed(
+            f"{store}:{namespace} is not in this deployment's allowed namespaces "
+            f"({', '.join(allowed) or 'none configured'})"
+        )
+
     def tag(self, subject_id: str, store: str, namespace: str, record_id: str) -> None:
+        # Checked BEFORE the ledger write: an entry that should not exist must
+        # never reach the table forget() reads from.
+        self._check_namespace(store, namespace)
         self.ledger.record(
             TagRecord(
                 subject_hash=self._subject_hash(subject_id),
@@ -63,7 +132,15 @@ class Lethe:
         return {
             "subject_hash": subject_hash,
             "layers": [
-                {"store": store, "namespace": namespace, "count": n}
+                {
+                    "store": store,
+                    "namespace": namespace,
+                    "count": n,
+                    # forget() will refuse a layer outside the allowlist, so a
+                    # preview that did not say so would misstate the blast
+                    # radius the caller is about to confirm.
+                    "allowed": self._namespace_allowed(store, namespace),
+                }
                 for (store, namespace), n in sorted(counts.items())
             ],
         }
@@ -110,6 +187,26 @@ class Lethe:
 
         layers: list[LayerResult] = []
         for (store, namespace), ids in groups.items():
+            # The allowlist bounds DELETION, not merely tagging. A ledger entry
+            # can predate the allowlist, or be written by anything with SQL
+            # access to lethe_provenance, and forget() would otherwise honour
+            # it. Recorded as an unhandled layer — the same shape as a store
+            # with no connector — so all_verified goes False and the
+            # certificate says a layer was found and not swept, rather than
+            # quietly omitting it.
+            if not self._namespace_allowed(store, namespace):
+                layers.append(
+                    LayerResult(
+                        store,
+                        namespace,
+                        deleted_count=0,
+                        verified_absent=False,
+                        requested_count=len(ids),
+                        handled=False,
+                        verify_method="not performed: namespace outside the allowlist",
+                    )
+                )
+                continue
             connector = self.connectors.get(store)
             if connector is None:
                 # A tagged store with no configured connector must NOT crash the
@@ -280,6 +377,13 @@ class Lethe:
         ledger so a subsequent forget() will delete and certify it. Detection is
         the default; remediation mutates the ledger and is opt-in.
         """
+        if tag_untracked:
+            # Fail before scanning rather than part-way through tagging: a
+            # partial remediation would leave the ledger in a state the caller
+            # did not ask for and cannot easily see.
+            for store, namespace, _ in targets:
+                self._check_namespace(store, namespace)
+
         subject_hash = self._subject_hash(subject_id)
         tracked: dict[tuple[str, str], set[str]] = defaultdict(set)
         for row in self.ledger.lookup(subject_hash):

@@ -118,6 +118,42 @@ Read `all_verified` as **"everything Lethe was told about is gone"**, never as
 exists to narrow this gap by scanning a store directly rather than trusting the
 ledger; it is a detection tool, not a guarantee.
 
+### Adversary D — the agent you connected to the MCP server
+
+The MCP surface exists to be driven by autonomous agents, so an agent that is
+confused, prompt-injected through retrieved content, or simply buggy is a
+realistic failure mode — and deletion is the one operation that cannot be
+undone.
+
+`lethe_tag` takes a namespace and record id from its caller, and `forget()`
+deletes what the ledger holds. Without a configured allowlist, an agent can
+therefore direct a delete at **any table the database user can write**, not
+only the stores Lethe was set up to sweep. The resulting certificate is
+*honest* — it accurately records what was deleted — which is what makes this
+hard to notice: nothing malfunctions.
+
+**Mitigated by `allowed_namespaces` / `LETHE_ALLOWED_NAMESPACES`**, which names
+the `(store, namespace)` pairs a deployment may ever tag — and ever delete
+from. It is enforced in `Lethe.tag`, not at the MCP boundary, so the CLI, the
+library and `reconcile(tag_untracked=True)` are covered by the same rule.
+
+`forget()` checks it as well, because the ledger is not a trusted input: a row
+can predate the allowlist, or be written by anything holding SQL access to
+`lethe_provenance`. A layer outside the allowlist is recorded as unhandled, so
+`all_verified` goes False and the certificate states that a layer was found and
+not swept — Lethe refuses to certify an erasure it deliberately declined to
+perform.
+
+It is **unset by default**, meaning unrestricted, so that upgrading cannot
+silently start rejecting a deployment's real traffic. Set it. `lethe_status`
+reports which mode a server is in. The two-step confirm token does *not* cover
+this: the token is minted by `lethe_forget_preview` and handed to the same
+caller, so it defends against a mis-click, not against an agent that intends
+the deletion.
+
+Least-privilege database credentials remain the backstop, and are worth having
+regardless of the allowlist.
+
 ## Other residual risks
 
 - **Key compromise.** Anyone holding the private key can mint certificates that
@@ -153,3 +189,4 @@ ledger; it is a detection tool, not a guarantee.
 | Deletion happened at `issued_at` | Yes | Yes **if the chain is anchored**; otherwise no — issuer's clock |
 | Everything Lethe knew about was deleted | Yes | Yes |
 | Nothing about this person remains | **No** — ledger-shaped coverage | **No** |
+| Only intended stores can be deleted from | Yes, with an allowlist configured | Yes, with an allowlist configured |
