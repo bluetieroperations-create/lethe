@@ -1,4 +1,5 @@
 import json
+import os
 
 import click
 import psycopg
@@ -6,7 +7,7 @@ import psycopg
 from .audit import AuditLog
 from .certificate import verify_certificate
 from .connectors.pgvector import PgVectorConnector
-from .core import Lethe
+from .core import Lethe, NamespaceNotAllowed, parse_allowed_namespaces
 from .ledger import Ledger
 from .models import Certificate
 from .signing import Signer
@@ -91,6 +92,14 @@ def reverify(subject_id: str, database_url: str, salt: str) -> None:
     raise SystemExit(0 if result["still_absent"] else 1)
 
 
+def _allowed_namespaces():
+    """Shared by the CLI commands that can write to the ledger."""
+    try:
+        return parse_allowed_namespaces(os.environ.get("LETHE_ALLOWED_NAMESPACES"))
+    except ValueError as e:
+        raise SystemExit(f"lethe: {e}") from None
+
+
 @cli.command("reconcile")
 @click.argument("subject_id")
 @click.option("--database-url", envvar="DATABASE_URL", required=True)
@@ -135,10 +144,14 @@ def reconcile(
             signer=Signer.generate(),  # unused: reconcile never signs
             connectors={"pgvector": PgVectorConnector(conn)},
             salt=salt,
+            allowed_namespaces=_allowed_namespaces(),
         )
-        result = lethe.reconcile(
-            subject_id, targets=parsed, tag_untracked=tag_untracked
-        )
+        try:
+            result = lethe.reconcile(
+                subject_id, targets=parsed, tag_untracked=tag_untracked
+            )
+        except NamespaceNotAllowed as e:
+            raise SystemExit(f"lethe: {e}") from None
     click.echo(json.dumps(result, indent=2))
     raise SystemExit(0 if result["clean"] else 1)
 

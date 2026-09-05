@@ -9,6 +9,43 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.4.0] — 2026-09-05
+
+### Added
+
+- **Namespace allowlist** (#8). `lethe_tag` accepted a namespace straight from
+  its caller, so an agent driving the MCP server could direct a delete at any
+  table the configured database user could write — not only the stores Lethe
+  was set up to sweep. Confirmed by reproduction against v0.3.1: a single tag
+  call naming an unrelated table, then the ordinary preview/confirm/forget
+  sequence, deleted the row and produced a certificate reading
+  `all_verified: true`. The certificate was *honest*, which is what made it
+  hard to notice — nothing malfunctioned.
+
+  `Lethe(allowed_namespaces={"pgvector": {"documents"}})` and
+  `LETHE_ALLOWED_NAMESPACES=pgvector:documents,...` name the `(store,
+  namespace)` pairs a deployment may ever tag, and therefore ever delete from.
+
+  Enforced in `Lethe.tag`, **not** at the MCP boundary: the ledger is what
+  `forget()` deletes from, so guarding one entry point would leave the CLI, the
+  library and `reconcile(tag_untracked=True)` able to write entries `forget()`
+  would then honour. `reconcile` validates every target before scanning, so a
+  refusal cannot leave a partial remediation.
+
+  **Unset means unrestricted**, preserving existing behaviour on upgrade — but
+  a value that is set and empty is a misconfiguration, not a way to say "allow
+  nothing", because running unrestricted due to a variable expanding to nothing
+  is the exact failure this control exists to prevent. `lethe_status` now
+  reports `namespace_allowlist` so an operator can see which mode they are in,
+  and MCP returns a `NAMESPACE_NOT_ALLOWED` envelope rather than an INTERNAL
+  traceback.
+
+### Fixed
+
+- `build_context` validated the allowlist only after opening a database
+  connection. Configuration is now checked before any side effect, so a
+  malformed allowlist fails startup rather than leaving a connection open.
+
 ## [0.3.1] — 2026-09-05
 
 ### Fixed
@@ -156,6 +193,7 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
+[0.4.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.4.0
 [0.3.1]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.2.0

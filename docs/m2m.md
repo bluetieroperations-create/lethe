@@ -13,6 +13,15 @@ Full mode (can delete) — set:
 
     LETHE_DATABASE_URL   Postgres + pgvector, holds ledger/audit + your data
     LETHE_SALT           subject-hashing salt (keep stable per deployment)
+    LETHE_ALLOWED_NAMESPACES  STRONGLY RECOMMENDED. Comma-separated
+                         STORE:NAMESPACE pairs this server may ever tag,
+                         and therefore ever delete from, e.g.
+                         pgvector:documents,pgvector:chat_turns
+                         Unset means unrestricted: `lethe_tag` will accept
+                         ANY namespace, so a confused or prompt-injected
+                         agent can direct a delete at any table the
+                         database user can write. `lethe_status` reports
+                         which mode you are in.
     LETHE_KEY_FILE       Ed25519 private key (make one: lethe keygen --out key.bin)
     LETHE_TRUSTED_PUBLIC_KEY   optional, default pin for lethe_verify_certificate
 
@@ -46,6 +55,8 @@ Claude Code registration example:
 Errors are machine-branchable: `{"ok": false, "error": {"code", "message",
 "retriable"}}` with codes `SUBJECT_NOT_FOUND`, `NO_LAYERS_CONFIGURED`,
 `STALE_PREVIEW`, `TOKEN_EXPIRED`, `TOKEN_INVALID`, `TOKEN_REUSED`,
+`NAMESPACE_NOT_ALLOWED` (the namespace is outside this deployment's
+allowlist — not retriable; do not retry with a different subject),
 `CERTIFICATE_TOO_LARGE`, `CONNECTOR_ERROR` (retriable). On
 `STALE_PREVIEW`/`TOKEN_*`, re-preview and confirm again. Tokens are
 process-local: a server restart voids them. Consuming a token is an

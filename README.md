@@ -213,6 +213,12 @@ operator's published public key to pin against). Full guide:
 - **Pre-existing data** (written before you adopted Lethe) is found by
   `lethe reconcile` where the store exposes a queryable subject field, and can
   be tagged for deletion with `--tag-untracked`.
+- **Restrict what a deployment may delete from.** `lethe_tag` takes a namespace
+  from its caller, so without an allowlist an agent driving the MCP server can
+  direct a delete at any table the database user can write. Set
+  `LETHE_ALLOWED_NAMESPACES=pgvector:documents,pgvector:chat_turns` (or
+  `Lethe(allowed_namespaces=…)`); `lethe status` reports whether a deployment is
+  running unrestricted. Unset means unrestricted, for backward compatibility.
 - **Self-attestation, unless you anchor.** The operator signs their own
   certificate and `issued_at` is their own clock. `lethe anchor` timestamps the
   audit head with an external RFC 3161 authority, which closes backdating; see
