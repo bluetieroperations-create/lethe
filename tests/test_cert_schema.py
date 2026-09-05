@@ -1,3 +1,4 @@
+import base64
 import hashlib
 
 from lethe.cert_schema import schema_errors, verify_certificate_json
@@ -149,11 +150,25 @@ def test_verify_json_key_mismatch_on_forged_cert():
     assert result["reasons"] == ["KEY_MISMATCH"]
 
 
-def test_verify_json_key_substitution_is_bad_signature():
+def test_verify_json_key_substitution_is_key_id_mismatch():
+    """Swapping in another operator's key to satisfy the pin check is now caught
+    by key_id — which is derived from the public key — before the signature is
+    even checked. Stricter and more specific than the old BAD_SIGNATURE."""
     data, _ = _signed_golden()
     _, operator_pub = _signed_golden()
     data["public_key"] = operator_pub  # spoof the pin check
     result = verify_certificate_json(data, trusted_public_key=operator_pub)
+    assert result["reasons"] == ["KEY_ID_MISMATCH"]
+
+
+def test_verify_json_bad_signature_still_reachable():
+    """key_id must not mask a plain signature failure: corrupt only the
+    signature, leaving key and payload internally consistent."""
+    data, pub = _signed_golden()
+    sig = bytearray(base64.b64decode(data["signature"]))
+    sig[0] ^= 0xFF
+    data["signature"] = base64.b64encode(bytes(sig)).decode()
+    result = verify_certificate_json(data, trusted_public_key=pub)
     assert result["reasons"] == ["BAD_SIGNATURE"]
 
 

@@ -83,7 +83,7 @@ def test_status_full_mode(ctx):
     assert r["ok"] is True
     assert r["mode"] == "full"
     assert r["connectors"] == ["fake"]
-    assert r["cert_schema"] == "lethe.cert/2"
+    assert r["cert_schema"] == "lethe.cert/3"
 
 
 def test_preview_unknown_subject(ctx):

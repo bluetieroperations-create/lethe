@@ -59,7 +59,7 @@ def test_forget_certificate_carries_v2_evidence(setup):
     cert = lethe.forget("user-1", request_id="req-1")
     p = cert.payload
 
-    assert p["schema"] == "lethe.cert/2"
+    assert p["schema"] == "lethe.cert/3"
     # valid_until is set from issued_at + the validity window, and is after it
     assert p["valid_until"] is not None
     assert p["valid_until"] > p["issued_at"]
@@ -155,3 +155,27 @@ def test_preview_unknown_subject_is_empty(conn):
         connectors={}, salt="test-salt",
     )
     assert lethe.preview("nobody@example.com")["layers"] == []
+
+
+def test_certificate_binds_to_the_audit_chain(setup):
+    """audit_head must be the real chain tip this run started from — not an
+    arbitrary string — so the certificate and the tamper-evident log point at
+    each other and neither can be rewritten alone."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    head = cert.payload["audit_head"]
+    assert head is not None
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT entry, entry_hash FROM lethe_audit ORDER BY seq ASC")
+        rows = cur.fetchall()
+
+    # The cert names the forget_started entry's hash...
+    assert rows[0][0]["event"] == "forget_started"
+    assert rows[0][1] == head
+    # ...and the completion entry chains forward from it carrying the cert hash.
+    assert rows[1][0]["event"] == "forget"
+    assert rows[1][0]["payload_hash"] == cert.payload_hash
+    assert lethe.audit.verify_chain(expected_head=lethe.audit.head()) is True

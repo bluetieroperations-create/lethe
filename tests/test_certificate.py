@@ -1,8 +1,15 @@
+import hashlib
+
 import pytest
 
-from lethe.certificate import CLAIM, build_certificate, verify_certificate
+from lethe.certificate import (
+    CLAIM,
+    build_certificate,
+    canonical_payload_bytes,
+    verify_certificate,
+)
 from lethe.models import Certificate, LayerResult
-from lethe.signing import Signer
+from lethe.signing import Signer, key_id_for
 
 
 def _layers():
@@ -127,7 +134,7 @@ def test_certificate_payload_declares_schema_version():
         request_id="r", subject_hash="s", layers=_layers(),
         issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
     )
-    assert cert.payload["schema"] == "lethe.cert/2"
+    assert cert.payload["schema"] == "lethe.cert/3"
 
 
 def test_v2_fields_present_and_signed():
@@ -197,3 +204,72 @@ def test_valid_until_equal_issued_at_is_rejected():
             issued_at="2026-06-21T00:00:00+00:00", version="0.1.0", signer=signer,
             valid_until="2026-06-21T00:00:00+00:00",  # equal => empty window
         )
+
+
+# --- cert v3: key identity and audit-chain binding ---
+
+
+def test_key_id_is_derived_from_the_public_key():
+    signer = Signer.generate()
+    cert = build_certificate(
+        request_id="r", subject_hash="s", layers=_layers(),
+        issued_at="2026-06-21T00:00:00+00:00", version="0.2.1", signer=signer,
+    )
+    assert cert.payload["key_id"] == key_id_for(signer.public_key_b64())
+    assert cert.payload["key_id"].startswith("ed25519:")
+    # Two different keys must not collide on key_id.
+    assert key_id_for(Signer.generate().public_key_b64()) != cert.payload["key_id"]
+
+
+def test_key_id_mismatch_fails_verification():
+    """key_id must be load-bearing, not decorative: a cert naming a key epoch
+    other than the one that signed it is rejected even though the pinned key,
+    payload hash and signature are all internally consistent."""
+    signer = Signer.generate()
+    cert = build_certificate(
+        request_id="r", subject_hash="s", layers=_layers(),
+        issued_at="2026-06-21T00:00:00+00:00", version="0.2.1", signer=signer,
+    )
+    forged = dict(cert.payload)
+    forged["key_id"] = key_id_for(Signer.generate().public_key_b64())
+    data = canonical_payload_bytes(forged)
+    # Re-sign and re-hash so ONLY the key_id claim is wrong.
+    tampered = Certificate(
+        payload=forged,
+        payload_hash=hashlib.sha256(data).hexdigest(),
+        signature=signer.sign(data),
+        public_key=signer.public_key_b64(),
+    )
+    assert verify_certificate(tampered, signer.public_key_b64()) is False
+
+
+def test_audit_head_and_timestamp_are_carried_and_signed():
+    signer = Signer.generate()
+    head = "a" * 64
+    cert = build_certificate(
+        request_id="r", subject_hash="s", layers=_layers(),
+        issued_at="2026-06-21T00:00:00+00:00", version="0.2.1", signer=signer,
+        audit_head=head,
+    )
+    assert cert.payload["audit_head"] == head
+    # No external timestamping authority by default — asserted as null rather
+    # than omitted, so a reader can tell "unattested" from "field missing".
+    assert cert.payload["timestamp"] is None
+    assert verify_certificate(cert, signer.public_key_b64()) is True
+
+    # The signature must bind audit_head: flipping it invalidates the cert.
+    cert.payload["audit_head"] = "b" * 64
+    assert verify_certificate(cert, signer.public_key_b64()) is False
+
+
+def test_claim_discloses_self_issuance():
+    """The self-attestation limit travels inside the signed payload, so it
+    cannot be dropped by whoever presents the certificate."""
+    signer = Signer.generate()
+    cert = build_certificate(
+        request_id="r", subject_hash="s", layers=_layers(),
+        issued_at="2026-06-21T00:00:00+00:00", version="0.2.1", signer=signer,
+    )
+    claim = cert.payload["claim"]
+    assert "self-issued" in claim
+    assert "issuer's own clock" in claim

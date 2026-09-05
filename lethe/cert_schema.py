@@ -12,7 +12,7 @@ from importlib import resources
 import jsonschema
 
 from .certificate import canonical_payload_bytes
-from .signing import verify_signature
+from .signing import key_id_for, verify_signature
 
 
 # A certificate is meant to be verifiable forever, so newer verifiers must still
@@ -22,8 +22,9 @@ from .signing import verify_signature
 _SCHEMA_FILES = {
     "lethe.cert/1": "schemas/certificate-v1.json",
     "lethe.cert/2": "schemas/certificate-v2.json",
+    "lethe.cert/3": "schemas/certificate-v3.json",
 }
-_LATEST = "lethe.cert/2"
+_LATEST = "lethe.cert/3"
 
 
 @lru_cache(maxsize=None)
@@ -74,7 +75,8 @@ def verify_certificate_json(data, trusted_public_key: str) -> dict:
     """Verify a certificate received as JSON. The trusted key is REQUIRED:
     an unpinned check only proves self-consistency, never authenticity.
     Reasons an agent can branch on, checked in order:
-    SCHEMA_MISMATCH -> KEY_MISMATCH -> PAYLOAD_TAMPERED -> BAD_SIGNATURE."""
+    SCHEMA_MISMATCH -> KEY_MISMATCH -> KEY_ID_MISMATCH -> PAYLOAD_TAMPERED ->
+    BAD_SIGNATURE."""
     errors = schema_errors(data)
     if errors:
         return {"valid": False, "reasons": ["SCHEMA_MISMATCH"], "detail": errors}
@@ -90,6 +92,16 @@ def verify_certificate_json(data, trusted_public_key: str) -> dict:
         return {
             "valid": False, "reasons": ["KEY_MISMATCH"],
             "detail": ["certificate's embedded key does not match the trusted key"],
+        }
+    # See verify_certificate: a derived key_id must be recomputed, or it is
+    # decorative. v1/v2 carry no key_id and skip this.
+    declared_kid = data["payload"].get("key_id")
+    if declared_kid is not None and not hmac_mod.compare_digest(
+        declared_kid.encode(), key_id_for(data["public_key"]).encode()
+    ):
+        return {
+            "valid": False, "reasons": ["KEY_ID_MISMATCH"],
+            "detail": ["payload key_id does not match the embedded public key"],
         }
     payload_bytes = canonical_payload_bytes(data["payload"])
     if hashlib.sha256(payload_bytes).hexdigest() != data["payload_hash"]:

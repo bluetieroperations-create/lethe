@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 from .models import Certificate, LayerResult
-from .signing import Signer, verify_signature
+from .signing import Signer, key_id_for, verify_signature
 
 CLAIM = (
     "Deleted across the listed retrieval layers and verified absent by re-query "
@@ -16,10 +16,15 @@ CLAIM = (
     "re-verify after that time, as the underlying index can change. Not a "
     "guarantee of erasure from backups, model weights, or systems outside Lethe's "
     "configured connectors, nor a guarantee against read replicas, caches, or "
-    "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone)."
+    "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone). "
+    "This certificate is self-issued: issued_at is the issuer's own clock, and the "
+    "signature proves only that the holder of key_id produced it. Where audit_head is "
+    "set, the certificate is bound to that position in the issuer's tamper-evident "
+    "audit chain. Where timestamp is null, no external timestamping authority has "
+    "corroborated the issue time."
 )
 
-CERT_SCHEMA_VERSION = "lethe.cert/2"
+CERT_SCHEMA_VERSION = "lethe.cert/3"
 
 
 def _canonical_bytes(payload: dict) -> bytes:
@@ -36,6 +41,8 @@ def build_certificate(
     signer: Signer,
     valid_until: str | None = None,
     declared_scope: list[str] | None = None,
+    audit_head: str | None = None,
+    timestamp: dict | None = None,
 ) -> Certificate:
     # The absence claim is asserted from issued_at up to valid_until. A
     # valid_until at or before issued_at is a self-nullifying window: the cert
@@ -87,6 +94,11 @@ def build_certificate(
 
     payload = {
         "schema": CERT_SCHEMA_VERSION,
+        # Which key signed this. Derived from the public key, so a verifier
+        # recomputes it and rejects a cert whose key_id disagrees with its own
+        # embedded key. Names the key epoch for operators who rotate: an old
+        # certificate stays verifiable against the retired key it names.
+        "key_id": signer.key_id(),
         "request_id": request_id,
         "subject_hash": subject_hash,
         "issued_at": issued_at,
@@ -98,6 +110,16 @@ def build_certificate(
         # The boundary the issuer drew: stores Lethe was configured to sweep, so
         # a reader can see what was in scope — and infer what was NOT checked.
         "declared_scope": sorted(declared_scope or []),
+        # Tip of the issuer's tamper-evident audit chain when this run began.
+        # Binds the certificate to a chain position, so a fabricated or
+        # backdated cert must also be consistent with a chain the issuer has
+        # published; None when no chain position was supplied.
+        "audit_head": audit_head,
+        # Reserved slot for external corroboration of issued_at (e.g. an
+        # RFC 3161 token from a timestamping authority). Null means nobody
+        # outside the issuer has attested to the time — the honest default,
+        # carried in the signed payload rather than left to the reader.
+        "timestamp": timestamp,
         "all_verified": all_verified,
         # Honest summary of what actually happened, so a zero-deletion or
         # unhandled-store outcome cannot be misread off the layer list.
@@ -150,6 +172,17 @@ def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
         return False
     if not hmac.compare_digest(embedded, trusted):
         return False
+
+    # key_id is derived from the public key, so it must be recomputed and
+    # compared — otherwise it is decorative, and a cert could name a key epoch
+    # other than the one that actually signed it. Only v3+ carries the field;
+    # older certs legitimately have none.
+    declared_kid = cert.payload.get("key_id")
+    if declared_kid is not None:
+        if not hmac.compare_digest(
+            declared_kid.encode(), key_id_for(cert.public_key).encode()
+        ):
+            return False
 
     data = _canonical_bytes(cert.payload)
     if hashlib.sha256(data).hexdigest() != cert.payload_hash:

@@ -85,9 +85,13 @@ class Lethe:
             groups[(row.store, row.namespace)].append(row.record_id)
 
         # Pre-flight audit event: a mid-loop connector failure must never
-        # leave real deletions with no audit trace; the started/completed
-        # pair brackets every destructive attempt.
-        self.audit.append(
+        # leave real deletions with no audit trace; the started/completed pair
+        # brackets every destructive attempt. Its hash is also the chain tip
+        # this run starts from — binding it into the signed certificate ties
+        # the cert to a position in the tamper-evident chain, and the
+        # completion entry below chains forward from here carrying the cert's
+        # payload_hash, so cert and chain point at each other.
+        audit_head = self.audit.append(
             {
                 "event": "forget_started",
                 "request_id": request_id,
@@ -155,6 +159,7 @@ class Lethe:
             # sweep. A tagged store missing a connector is still recorded (as an
             # unhandled layer); declared_scope names the full configured set.
             declared_scope=list(self.connectors.keys()),
+            audit_head=audit_head,
         )
 
         self.audit.append(
