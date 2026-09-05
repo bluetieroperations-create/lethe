@@ -259,3 +259,85 @@ def test_retention_does_not_resurrect_the_provenance_map(setup):
     second = lethe.forget("user-1", request_id="req-2")
     assert second.payload["layers_found"] == 0
     assert second.payload["all_verified"] is False
+
+
+# --- reconciliation: what the store holds vs what the ledger knows ---
+
+
+@pytest.fixture
+def owned_table(conn):
+    """A store table with a subject column, as a real deployment would have."""
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS owned_docs CASCADE")
+        cur.execute(
+            "CREATE TABLE owned_docs (id TEXT PRIMARY KEY, owner TEXT, body TEXT)"
+        )
+        cur.executemany(
+            "INSERT INTO owned_docs (id, owner, body) VALUES (%s, %s, %s)",
+            [("d1", "user-1", "a"), ("d2", "user-1", "b"), ("d3", "user-2", "c")],
+        )
+    conn.commit()
+    return conn
+
+
+def test_reconcile_finds_records_that_bypassed_the_wrapper(setup, owned_table):
+    """The coverage gap the ledger structurally cannot see: d2 was written
+    straight to the store, so forget() would never have touched it and the
+    certificate would still have said all_verified."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")  # only d1 is tracked
+
+    result = lethe.reconcile("user-1", targets=[("pgvector", "owned_docs", "owner")])
+
+    layer = result["layers"][0]
+    assert layer["scanned"] is True
+    assert layer["found_in_store"] == 2      # d1 and d2 belong to user-1
+    assert layer["tracked_in_ledger"] == 1   # only d1 was tagged
+    assert layer["untracked"] == ["d2"]
+    assert result["untracked_total"] == 1
+    assert result["clean"] is False
+    # Detection is non-mutating by default.
+    assert result["tagged_untracked"] is False
+    assert {r.record_id for r in lethe.ledger.lookup(lethe._subject_hash("user-1"))} == {"d1"}
+
+
+def test_reconcile_can_remediate_then_forget_deletes_everything(setup, owned_table):
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")
+
+    result = lethe.reconcile(
+        "user-1", targets=[("pgvector", "owned_docs", "owner")], tag_untracked=True
+    )
+    assert result["tagged_untracked"] is True
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    assert cert.payload["all_verified"] is True
+    assert cert.payload["records_deleted"] == 2
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM owned_docs")
+        assert {r[0] for r in cur.fetchall()} == {"d3"}  # user-2 untouched
+
+
+def test_reconcile_is_clean_only_when_everything_was_tracked(setup, owned_table):
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")
+    lethe.tag("user-1", "pgvector", "owned_docs", "d2")
+
+    result = lethe.reconcile("user-1", targets=[("pgvector", "owned_docs", "owner")])
+    assert result["untracked_total"] == 0
+    assert result["clean"] is True
+
+
+def test_unscannable_layer_is_never_reported_clean(setup, owned_table):
+    """A layer Lethe could not look at must not read as 'nothing untracked' —
+    that would be the exact overstatement reconcile exists to prevent."""
+    conn, lethe = setup
+    result = lethe.reconcile("user-1", targets=[("nonexistent", "owned_docs", "owner")])
+
+    layer = result["layers"][0]
+    assert layer["scanned"] is False
+    assert layer["untracked"] is None
+    assert "no configured connector" in layer["reason"]
+    assert result["untracked_total"] == 0   # nothing found, because nothing looked
+    assert result["clean"] is False         # but that is NOT clean

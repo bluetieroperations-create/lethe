@@ -39,3 +39,21 @@ class PgVectorConnector:
         return VerifyResult(
             absent=count == 0, residual_count=int(count), method=method, index_version=None
         )
+
+    def scan(self, namespace: str, subject_field: str, subject_value: str) -> list[str]:
+        """Record ids the table itself holds for this subject.
+
+        Asks the store directly instead of the ledger, so records written
+        without passing through Lethe are visible. `subject_field` is the
+        column naming the data subject (the same field the wrapper reads as
+        `subject_key`); it and `namespace` are quoted as identifiers, never
+        interpolated.
+        """
+        query = sql.SQL("SELECT {col} FROM {tbl} WHERE {subj} = %s").format(
+            col=sql.Identifier(self.id_column),
+            tbl=sql.Identifier(namespace),
+            subj=sql.Identifier(subject_field),
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(query, (subject_value,))
+            return [str(row[0]) for row in cur.fetchall()]

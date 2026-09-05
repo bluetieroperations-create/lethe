@@ -91,6 +91,58 @@ def reverify(subject_id: str, database_url: str, salt: str) -> None:
     raise SystemExit(0 if result["still_absent"] else 1)
 
 
+@cli.command("reconcile")
+@click.argument("subject_id")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+@click.option("--salt", envvar="LETHE_SALT", required=True)
+@click.option(
+    "--target",
+    "targets",
+    multiple=True,
+    required=True,
+    help="STORE:NAMESPACE:SUBJECT_FIELD to scan, repeatable. e.g. "
+    "pgvector:documents:user_id",
+)
+@click.option(
+    "--tag-untracked",
+    is_flag=True,
+    help="Tag anything found untracked into the ledger so a later forget "
+    "deletes and certifies it. Off by default: detection does not mutate.",
+)
+def reconcile(
+    subject_id: str, database_url: str, salt: str,
+    targets: tuple[str, ...], tag_untracked: bool,
+) -> None:
+    """Compare what a store holds for a subject against what the ledger knows.
+
+    forget() only deletes what was tagged, so writes that bypassed the wrapper
+    are invisible to it. This asks the stores directly. Exits non-zero if
+    untracked records were found, or if any target could not be scanned.
+    """
+    parsed = []
+    for t in targets:
+        parts = t.split(":")
+        if len(parts) != 3 or not all(parts):
+            raise click.BadParameter(
+                f"--target must be STORE:NAMESPACE:SUBJECT_FIELD, got {t!r}"
+            )
+        parsed.append((parts[0], parts[1], parts[2]))
+
+    with psycopg.connect(database_url) as conn:
+        lethe = Lethe(
+            ledger=Ledger(conn),
+            audit=AuditLog(conn),
+            signer=Signer.generate(),  # unused: reconcile never signs
+            connectors={"pgvector": PgVectorConnector(conn)},
+            salt=salt,
+        )
+        result = lethe.reconcile(
+            subject_id, targets=parsed, tag_untracked=tag_untracked
+        )
+    click.echo(json.dumps(result, indent=2))
+    raise SystemExit(0 if result["clean"] else 1)
+
+
 @cli.command("verify")
 @click.argument("cert_file")
 @click.option(
