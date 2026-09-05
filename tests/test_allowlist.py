@@ -168,16 +168,31 @@ def test_mcp_status_shows_when_a_deployment_is_unrestricted(tables):
     ]
 
 
-def test_malformed_allowlist_env_fails_server_startup(tmp_path):
+def test_malformed_allowlist_env_fails_server_startup(tmp_path, monkeypatch):
     """A misconfigured allowlist must stop the server, not start it
-    unrestricted."""
+    unrestricted — and must do so BEFORE any connection is opened.
+
+    The ordering is asserted directly rather than inferred: psycopg.connect is
+    replaced with a tripwire, so a regression that moved the parse after the
+    connect fails loudly here instead of depending on a DSN failing to resolve
+    (which would surface as a slow timeout, or not at all).
+    """
+    import psycopg
+
     from lethe.mcp import ConfigError, build_context
     from lethe.signing import Signer
+
+    def _tripwire(*args, **kwargs):
+        raise AssertionError(
+            "psycopg.connect was called before the allowlist was validated"
+        )
+
+    monkeypatch.setattr(psycopg, "connect", _tripwire)
 
     key = tmp_path / "k.bin"
     key.write_bytes(Signer.generate().private_bytes())
     env = {
-        "LETHE_DATABASE_URL": "postgresql://example/db",
+        "LETHE_DATABASE_URL": "postgresql://unused/db",
         "LETHE_SALT": "s",
         "LETHE_KEY_FILE": str(key),
         "LETHE_ALLOWED_NAMESPACES": "not-a-pair",
