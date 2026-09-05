@@ -67,7 +67,8 @@ class ConfirmGuard:
     def mint(self, subject_hash: str, layers: list[tuple[str, str, int]]) -> str:
         if not _HEX64.fullmatch(subject_hash):
             raise ValueError(
-                "subject_hash must be a 64-char lowercase hex digest (use hash_subject), got something else"
+                "subject_hash must be a 64-char lowercase hex digest "
+                "(use hash_subject), got something else"
             )
         expiry = int(self._clock()) + self.ttl_seconds
         nonce = secrets.token_hex(16)
@@ -80,14 +81,15 @@ class ConfirmGuard:
     ) -> None:
         if not _HEX64.fullmatch(subject_hash):
             raise ValueError(
-                "subject_hash must be a 64-char lowercase hex digest (use hash_subject), got something else"
+                "subject_hash must be a 64-char lowercase hex digest "
+                "(use hash_subject), got something else"
             )
         self._prune()
         try:
             version, expiry_s, nonce, fp, mac = token.split(".")
             expiry = int(expiry_s)
         except ValueError:
-            raise GuardError("TOKEN_INVALID", "malformed confirm token")
+            raise GuardError("TOKEN_INVALID", "malformed confirm token") from None
         if version != "v1":
             raise GuardError("TOKEN_INVALID", "unknown confirm-token version")
         if not hmac.compare_digest(mac, self._mac(subject_hash, fp, expiry, nonce)):

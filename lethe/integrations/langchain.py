@@ -138,7 +138,7 @@ class LetheVectorStore:
                 "vector store did not return ids aligned with the inputs; "
                 "cannot tag these records for deletion."
             )
-        for meta, rid in zip(metadatas, ids):
+        for meta, rid in zip(metadatas, ids, strict=True):
             subject = self._subject_of(meta)
             if subject is None:
                 continue  # only reached under on_missing_subject='skip'

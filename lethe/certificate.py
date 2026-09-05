@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 from .models import Certificate, LayerResult
-from .signing import Signer, verify_signature
+from .signing import Signer, key_id_for, verify_signature
 
 CLAIM = (
     "Deleted across the listed retrieval layers and verified absent by re-query "
@@ -13,13 +13,20 @@ CLAIM = (
     "count for each layer. Scope is limited to the declared connectors "
     "(declared_scope); a store not listed there was not checked. The absence is "
     "asserted as of issued_at and is not asserted beyond valid_until (when set) — "
-    "re-verify after that time, as the underlying index can change. Not a "
+    "re-verify after that time, as the underlying index can change (possible only "
+    "where reverifiable is true; otherwise the issuer did not retain the record "
+    "identifiers a re-query needs). Not a "
     "guarantee of erasure from backups, model weights, or systems outside Lethe's "
     "configured connectors, nor a guarantee against read replicas, caches, or "
-    "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone)."
+    "asynchronous propagation (e.g. eventually-consistent stores such as Pinecone). "
+    "This certificate is self-issued: issued_at is the issuer's own clock, and the "
+    "signature proves only that the holder of key_id produced it. Where audit_head is "
+    "set, the certificate is bound to that position in the issuer's tamper-evident "
+    "audit chain. Where timestamp is null, no external timestamping authority has "
+    "corroborated the issue time."
 )
 
-CERT_SCHEMA_VERSION = "lethe.cert/2"
+CERT_SCHEMA_VERSION = "lethe.cert/3"
 
 
 def _canonical_bytes(payload: dict) -> bytes:
@@ -36,6 +43,9 @@ def build_certificate(
     signer: Signer,
     valid_until: str | None = None,
     declared_scope: list[str] | None = None,
+    audit_head: str | None = None,
+    timestamp: dict | None = None,
+    reverifiable: bool = False,
 ) -> Certificate:
     # The absence claim is asserted from issued_at up to valid_until. A
     # valid_until at or before issued_at is a self-nullifying window: the cert
@@ -66,17 +76,17 @@ def build_certificate(
                 f"({issued_at}); a non-positive validity window is not certifiable"
             )
 
-    ordered = sorted(layers, key=lambda l: (l.store, l.namespace))
+    ordered = sorted(layers, key=lambda layer: (layer.store, layer.namespace))
 
-    def _is_erasure(l: LayerResult) -> bool:
+    def _is_erasure(layer: LayerResult) -> bool:
         # A layer is a genuine, certifiable erasure only when Lethe was handled
         # by a real connector, confirmed the records absent, AND actually removed
         # records this run. deleted_count 0 with verified_absent True means the
         # data was already gone (another subject's forget, or a prior partial
         # run) — Lethe did NOT perform this erasure and must not certify it.
-        return l.handled and l.verified_absent and l.deleted_count > 0
+        return layer.handled and layer.verified_absent and layer.deleted_count > 0
 
-    erasures = [_is_erasure(l) for l in ordered]
+    erasures = [_is_erasure(layer) for layer in ordered]
 
     # all_verified is the load-bearing claim a regulator relies on. It is True
     # ONLY if at least one layer was found AND every layer is a genuine erasure.
@@ -87,6 +97,11 @@ def build_certificate(
 
     payload = {
         "schema": CERT_SCHEMA_VERSION,
+        # Which key signed this. Derived from the public key, so a verifier
+        # recomputes it and rejects a cert whose key_id disagrees with its own
+        # embedded key. Names the key epoch for operators who rotate: an old
+        # certificate stays verifiable against the retired key it names.
+        "key_id": signer.key_id(),
         "request_id": request_id,
         "subject_hash": subject_hash,
         "issued_at": issued_at,
@@ -98,27 +113,43 @@ def build_certificate(
         # The boundary the issuer drew: stores Lethe was configured to sweep, so
         # a reader can see what was in scope — and infer what was NOT checked.
         "declared_scope": sorted(declared_scope or []),
+        # Tip of the issuer's tamper-evident audit chain when this run began.
+        # Binds the certificate to a chain position, so a fabricated or
+        # backdated cert must also be consistent with a chain the issuer has
+        # published; None when no chain position was supplied.
+        "audit_head": audit_head,
+        # Reserved slot for external corroboration of issued_at (e.g. an
+        # RFC 3161 token from a timestamping authority). Null means nobody
+        # outside the issuer has attested to the time — the honest default,
+        # carried in the signed payload rather than left to the reader.
+        "timestamp": timestamp,
+        # Whether the issuer retained what a later re-query needs. The claim
+        # advises re-verifying past valid_until; by default forget() purges the
+        # provenance map (data minimisation), which destroys the record ids that
+        # re-query requires. Saying so in the payload keeps the advice from
+        # being something the certificate cannot actually support.
+        "reverifiable": reverifiable,
         "all_verified": all_verified,
         # Honest summary of what actually happened, so a zero-deletion or
         # unhandled-store outcome cannot be misread off the layer list.
         "layers_found": len(ordered),
-        "records_deleted": sum(l.deleted_count for l in ordered),
-        "all_layers_handled": all(l.handled for l in ordered) if ordered else True,
+        "records_deleted": sum(layer.deleted_count for layer in ordered),
+        "all_layers_handled": all(layer.handled for layer in ordered) if ordered else True,
         "layers": [
             {
-                "store": l.store,
-                "namespace": l.namespace,
-                "deleted_count": l.deleted_count,
-                "verified_absent": l.verified_absent,
-                "requested_count": l.requested_count,
-                "handled": l.handled,
+                "store": layer.store,
+                "namespace": layer.namespace,
+                "deleted_count": layer.deleted_count,
+                "verified_absent": layer.verified_absent,
+                "requested_count": layer.requested_count,
+                "handled": layer.handled,
                 "erased": erased,
                 # cert v2 verification evidence (nullable — see LayerResult).
-                "residual_count": l.residual_count,
-                "verify_method": l.verify_method,
-                "index_version": l.index_version,
+                "residual_count": layer.residual_count,
+                "verify_method": layer.verify_method,
+                "index_version": layer.index_version,
             }
-            for l, erased in zip(ordered, erasures)
+            for layer, erased in zip(ordered, erasures, strict=True)
         ],
     }
     data = _canonical_bytes(payload)
@@ -149,6 +180,16 @@ def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
     except Exception:
         return False
     if not hmac.compare_digest(embedded, trusted):
+        return False
+
+    # key_id is derived from the public key, so it must be recomputed and
+    # compared — otherwise it is decorative, and a cert could name a key epoch
+    # other than the one that actually signed it. Only v3+ carries the field;
+    # older certs legitimately have none.
+    declared_kid = cert.payload.get("key_id")
+    if declared_kid is not None and not hmac.compare_digest(
+        declared_kid.encode(), key_id_for(cert.public_key).encode()
+    ):
         return False
 
     data = _canonical_bytes(cert.payload)

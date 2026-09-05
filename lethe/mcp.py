@@ -4,6 +4,7 @@ Six tools; the only destructive one (lethe_forget) requires a single-use
 confirm token minted by lethe_forget_preview, so a machine caller must have
 seen the exact blast radius it confirms. See docs/m2m.md."""
 
+import contextlib
 import functools
 import json
 import os
@@ -42,6 +43,22 @@ class ServerContext:
     def verify_only(self) -> bool:
         return self.lethe is None
 
+    # Handlers reach these only after their own verify_only guard. They exist
+    # so that path is expressed in the type system rather than assumed: if a
+    # guard is ever dropped, this raises a named error instead of an
+    # AttributeError on None — and a type checker can see the narrowing.
+    @property
+    def store(self) -> Lethe:
+        if self.lethe is None:
+            raise RuntimeError("verify-only server has no Lethe configured")
+        return self.lethe
+
+    @property
+    def confirm_guard(self) -> ConfirmGuard:
+        if self.guard is None:
+            raise RuntimeError("verify-only server has no confirm guard configured")
+        return self.guard
+
 
 def _ok(**kw) -> dict:
     return {"ok": True, **kw}
@@ -66,10 +83,9 @@ def _rollback(ctx) -> None:
     transaction; without this every later call fails InFailedSqlTransaction
     until restart (found by live MCP verification, not the test suite)."""
     if isinstance(ctx, ServerContext) and ctx.lethe is not None:
-        try:
+        # Connection may be gone entirely; the next call reports INTERNAL.
+        with contextlib.suppress(Exception):
             ctx.lethe.ledger.conn.rollback()
-        except Exception:
-            pass  # connection may be gone entirely; next call reports INTERNAL
 
 
 def _enveloped(fn):
@@ -85,7 +101,11 @@ def _enveloped(fn):
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
             _rollback(args[0] if args else None)
-            return _err("INTERNAL", f"unexpected {type(e).__name__} in {fn.__name__}", retriable=True)
+            return _err(
+                "INTERNAL",
+                f"unexpected {type(e).__name__} in {fn.__name__}",
+                retriable=True,
+            )
 
     return wrapper
 
@@ -101,8 +121,8 @@ def h_status(ctx: ServerContext) -> dict:
         return _ok(mode="verify-only", connectors=[], **common)
     return _ok(
         mode="full",
-        connectors=sorted(ctx.lethe.connectors),
-        audit_head=ctx.lethe.audit.head(),
+        connectors=sorted(ctx.store.connectors),
+        audit_head=ctx.store.audit.head(),
         **common,
     )
 
@@ -111,9 +131,9 @@ def h_status(ctx: ServerContext) -> dict:
 def h_tag(ctx: ServerContext, subject_id: str, store: str, namespace: str, record_id: str) -> dict:
     if ctx.verify_only:
         return _verify_only_err()
-    ctx.lethe.tag(subject_id, store, namespace, record_id)
+    ctx.store.tag(subject_id, store, namespace, record_id)
     out = _ok(tagged={"store": store, "namespace": namespace, "record_id": record_id})
-    if store not in ctx.lethe.connectors:
+    if store not in ctx.store.connectors:
         out["warning"] = (
             f"store '{store}' has no configured connector; "
             "forget will report it handled:false until one is configured"
@@ -122,22 +142,22 @@ def h_tag(ctx: ServerContext, subject_id: str, store: str, namespace: str, recor
 
 
 def _layer_tuples(preview: dict) -> list[tuple[str, str, int]]:
-    return [(l["store"], l["namespace"], l["count"]) for l in preview["layers"]]
+    return [(lyr["store"], lyr["namespace"], lyr["count"]) for lyr in preview["layers"]]
 
 
 @_enveloped
 def h_forget_preview(ctx: ServerContext, subject_id: str) -> dict:
     if ctx.verify_only:
         return _verify_only_err()
-    p = ctx.lethe.preview(subject_id)
+    p = ctx.store.preview(subject_id)
     if not p["layers"]:
         return _err("SUBJECT_NOT_FOUND", "no tagged records for this subject")
-    token = ctx.guard.mint(p["subject_hash"], _layer_tuples(p))
+    token = ctx.confirm_guard.mint(p["subject_hash"], _layer_tuples(p))
     return _ok(
         subject_hash=p["subject_hash"],
         layers=p["layers"],
         confirm_token=token,
-        expires_in_seconds=ctx.guard.ttl_seconds,
+        expires_in_seconds=ctx.confirm_guard.ttl_seconds,
     )
 
 
@@ -145,15 +165,15 @@ def h_forget_preview(ctx: ServerContext, subject_id: str) -> dict:
 def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
     if ctx.verify_only:
         return _verify_only_err()
-    p = ctx.lethe.preview(subject_id)
+    p = ctx.store.preview(subject_id)
     if not p["layers"]:
         return _err("SUBJECT_NOT_FOUND", "no tagged records for this subject")
     try:
-        ctx.guard.check_and_consume(p["subject_hash"], _layer_tuples(p), confirm_token)
+        ctx.confirm_guard.check_and_consume(p["subject_hash"], _layer_tuples(p), confirm_token)
     except GuardError as e:
         return _err(e.code, e.message)
     try:
-        cert = ctx.lethe.forget(subject_id)
+        cert = ctx.store.forget(subject_id)
     except Exception as e:
         # Connector/DB failure mid-loop: ledger is preserved by core for retry.
         # The token is already burned (irrevocable pre-commit): re-preview.
@@ -177,9 +197,9 @@ def h_forget(ctx: ServerContext, subject_id: str, confirm_token: str) -> dict:
 def h_verify_subject(ctx: ServerContext, subject_id: str) -> dict:
     if ctx.verify_only:
         return _verify_only_err()
-    subject_hash = hash_subject(subject_id, ctx.lethe.salt)
+    subject_hash = hash_subject(subject_id, ctx.store.salt)
     groups: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for row in ctx.lethe.ledger.lookup(subject_hash):
+    for row in ctx.store.ledger.lookup(subject_hash):
         groups[(row.store, row.namespace)].append(row.record_id)
     if not groups:
         return _ok(
@@ -188,7 +208,7 @@ def h_verify_subject(ctx: ServerContext, subject_id: str) -> dict:
         )
     layers = []
     for (store, namespace), ids in sorted(groups.items()):
-        connector = ctx.lethe.connectors.get(store)
+        connector = ctx.store.connectors.get(store)
         if connector is None:
             layers.append(
                 {"store": store, "namespace": namespace, "verified_absent": False, "handled": False}
@@ -219,7 +239,9 @@ def _cert_too_large(certificate) -> bool:
 
 
 @_enveloped
-def h_verify_certificate(ctx: ServerContext, certificate: dict, public_key: str | None = None) -> dict:
+def h_verify_certificate(
+    ctx: ServerContext, certificate: dict, public_key: str | None = None
+) -> dict:
     pin = public_key or ctx.trusted_public_key
     if not pin:
         return _err(
@@ -269,7 +291,7 @@ def build_context(environ=os.environ) -> ServerContext:
         raise ConfigError(
             f"LETHE_KEY_FILE ({key_file!r}) could not be loaded as an Ed25519 "
             f"private key ({type(e).__name__}); it must be 32 raw private-key bytes"
-        )
+        ) from None
     conn = psycopg.connect(db_url)  # lives for the stdio server's lifetime
     lethe = Lethe(
         ledger=Ledger(conn),
@@ -352,5 +374,5 @@ def main() -> None:
     try:
         ctx = build_context()
     except ConfigError as e:
-        raise SystemExit(f"lethe-mcp: {e}")
+        raise SystemExit(f"lethe-mcp: {e}") from None
     create_server(ctx).run()  # stdio transport

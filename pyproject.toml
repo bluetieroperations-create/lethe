@@ -3,7 +3,7 @@
 # "lethe-delete". The import package stays `lethe` (pip install lethe-delete;
 # import lethe) and the CLI commands stay `lethe` / `lethe-mcp`.
 name = "lethe-delete"
-version = "0.2.0"
+dynamic = ["version"]
 description = "The forget button for AI — provable data-subject deletion for AI memory, with signed deletion certificates."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,12 +24,17 @@ Repository = "https://github.com/bluetieroperations-create/lethe"
 Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9"]
-mcp = ["mcp>=1.9", "jsonschema>=4.21"]
+dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2", "ruff>=0.6", "mypy>=1.11", "asn1crypto>=1.5"]
+mcp = ["mcp>=1.9,<2", "jsonschema>=4.21"]
+# RFC 3161 external anchoring. Optional: Lethe runs without it, unanchored.
+anchor = ["asn1crypto>=1.5"]
 
 [project.scripts]
 lethe = "lethe.cli:cli"
 lethe-mcp = "lethe.mcp:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "lethe.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["lethe*"]
@@ -40,3 +45,30 @@ lethe = ["schemas/*.json"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# A focused set: correctness (E/F), import order (I), modern syntax (UP),
+# likely-bug patterns (B), and comprehension/simplification hints (SIM/C4).
+# Deliberately NOT enabled:
+#   BLE001/S110 — Lethe catches broadly on purpose where ANY failure must read
+#     as "verification failed" (signature checks, key decoding). Enforcing them
+#     would require noqa at every security-critical catch, which is worse.
+#   RUF059 — flags intentionally-unpacked-but-unused values in tests.
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+# Live tests are DESELECTED by default, not skipped: CI fails the build on any
+# skipped test (a green run that silently skipped half the suite overstates
+# what it proved), so a credential-gated test must not register as a skip.
+# Run them with:  pytest -m live
+markers = ["live: hits a real third-party service; needs credentials"]
+addopts = "-m 'not live'"

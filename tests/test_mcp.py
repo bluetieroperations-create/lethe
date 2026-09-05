@@ -1,6 +1,9 @@
 """Handler-level tests: real Ledger/AuditLog on the test DB, fake vector store.
 The MCP transport layer is tested separately (registration + e2e)."""
 
+import asyncio
+import os
+
 import pytest
 
 from lethe.audit import AuditLog
@@ -9,7 +12,10 @@ from lethe.core import Lethe
 from lethe.guard import ConfirmGuard
 from lethe.ledger import Ledger
 from lethe.mcp import (
+    ConfigError,
     ServerContext,
+    build_context,
+    create_server,
     h_forget,
     h_forget_preview,
     h_status,
@@ -18,6 +24,8 @@ from lethe.mcp import (
     h_verify_subject,
 )
 from lethe.signing import Signer
+
+DATABASE_URL = os.environ.get("LETHE_TEST_DATABASE_URL")
 
 
 class FakeStore:
@@ -79,7 +87,7 @@ def test_status_full_mode(ctx):
     assert r["ok"] is True
     assert r["mode"] == "full"
     assert r["connectors"] == ["fake"]
-    assert r["cert_schema"] == "lethe.cert/2"
+    assert r["cert_schema"] == "lethe.cert/3"
 
 
 def test_preview_unknown_subject(ctx):
@@ -240,15 +248,14 @@ def test_verify_only_refuses_all_write_and_read_paths():
 
 
 def test_verify_certificate_schema_mismatch_through_handler(ctx):
-    r = h_verify_certificate(ctx, {"payload": {}, "payload_hash": "zz", "signature": "a", "public_key": "b"})
+    r = h_verify_certificate(
+        ctx,
+        {"payload": {}, "payload_hash": "zz", "signature": "a", "public_key": "b"},
+    )
     assert r["ok"] is True
     assert r["valid"] is False
     assert r["reasons"] == ["SCHEMA_MISMATCH"]
 
-
-import asyncio
-
-from lethe.mcp import ConfigError, build_context, create_server
 
 
 def test_create_server_registers_six_tools_with_honest_annotations():
@@ -305,6 +312,8 @@ def test_build_context_bad_key_file_fails_fast(tmp_path):
 
 
 def test_build_context_full_env(tmp_path):
+    if not DATABASE_URL:
+        pytest.skip("needs LETHE_TEST_DATABASE_URL")
     import os as _os
     key_file = tmp_path / "key.bin"
     key_file.write_bytes(Signer.generate().private_bytes())
@@ -329,6 +338,8 @@ def test_build_context_initializes_schema_on_fresh_db(tmp_path):
     of dying UndefinedTable. Deliberately does NOT take the `conn` fixture — a
     real single-process deployment has exactly ONE connection; holding a second
     open against Neon's transaction pooler makes cross-connection DDL flaky."""
+    if not DATABASE_URL:
+        pytest.skip("needs LETHE_TEST_DATABASE_URL")
     import os as _os
 
     import psycopg as _psycopg
@@ -338,7 +349,10 @@ def test_build_context_initializes_schema_on_fresh_db(tmp_path):
     # connection is the only one for the rest of the test.
     with _psycopg.connect(url) as c:
         with c.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS lethe_provenance, lethe_audit CASCADE")
+            cur.execute(
+                "DROP TABLE IF EXISTS lethe_provenance, lethe_audit, "
+                "lethe_retained_ids CASCADE"
+            )
         c.commit()
 
     key_file = tmp_path / "key.bin"
@@ -365,9 +379,8 @@ def test_handler_recovers_after_sql_error(ctx):
     ctx.lethe.ledger.init_schema()  # tables exist; isolate the fault we inject
     ctx.lethe.audit.init_schema()
     import psycopg as _psycopg
-    with pytest.raises(_psycopg.errors.UndefinedTable):
-        with ctx.lethe.ledger.conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM does_not_exist_xyz")
+    with pytest.raises(_psycopg.errors.UndefinedTable), ctx.lethe.ledger.conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM does_not_exist_xyz")
     # The transaction is now aborted. The next handler hits it, returns a clean
     # envelope (not a raw psycopg crash), and rolls back in the error path...
     poisoned = h_status(ctx)

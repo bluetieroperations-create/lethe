@@ -59,7 +59,7 @@ def test_forget_certificate_carries_v2_evidence(setup):
     cert = lethe.forget("user-1", request_id="req-1")
     p = cert.payload
 
-    assert p["schema"] == "lethe.cert/2"
+    assert p["schema"] == "lethe.cert/3"
     # valid_until is set from issued_at + the validity window, and is after it
     assert p["valid_until"] is not None
     assert p["valid_until"] > p["issued_at"]
@@ -155,3 +155,189 @@ def test_preview_unknown_subject_is_empty(conn):
         connectors={}, salt="test-salt",
     )
     assert lethe.preview("nobody@example.com")["layers"] == []
+
+
+def test_certificate_binds_to_the_audit_chain(setup):
+    """audit_head must be the real chain tip this run started from — not an
+    arbitrary string — so the certificate and the tamper-evident log point at
+    each other and neither can be rewritten alone."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    head = cert.payload["audit_head"]
+    assert head is not None
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT entry, entry_hash FROM lethe_audit ORDER BY seq ASC")
+        rows = cur.fetchall()
+
+    # The cert names the forget_started entry's hash...
+    assert rows[0][0]["event"] == "forget_started"
+    assert rows[0][1] == head
+    # ...and the completion entry chains forward from it carrying the cert hash.
+    assert rows[1][0]["event"] == "forget"
+    assert rows[1][0]["payload_hash"] == cert.payload_hash
+    assert lethe.audit.verify_chain(expected_head=lethe.audit.head()) is True
+
+
+# --- re-verification after valid_until (opt-in id retention) ---
+
+
+def _lethe_with_retention(conn):
+    return Lethe(
+        ledger=Ledger(conn),
+        audit=AuditLog(conn),
+        signer=Signer.generate(),
+        connectors={"pgvector": PgVectorConnector(conn)},
+        salt="test-salt",
+        retain_verification_ids=True,
+    )
+
+
+def test_default_deployment_is_honestly_not_reverifiable(setup):
+    """Default purges the provenance map, so the record ids a re-query needs
+    are gone. The certificate must say so rather than advising a re-check it
+    cannot support, and reverify() must refuse rather than return a hollow
+    'absent' derived from having nothing to check."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    cert = lethe.forget("user-1", request_id="req-1")
+
+    assert cert.payload["reverifiable"] is False
+    result = lethe.reverify("user-1")
+    assert result["reverifiable"] is False
+    assert result["still_absent"] is None
+    assert "retain_verification_ids" in result["reason"]
+
+
+def test_retained_ids_make_reverification_possible(setup):
+    conn, _ = setup
+    lethe = _lethe_with_retention(conn)
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    lethe.tag("user-1", "pgvector", "test_vectors", "r2")
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    assert cert.payload["reverifiable"] is True
+    assert cert.payload["all_verified"] is True
+
+    result = lethe.reverify("user-1")
+    assert result["reverifiable"] is True
+    assert result["still_absent"] is True
+    assert result["layers"][0]["residual_count"] == 0
+
+
+def test_reverify_catches_data_that_came_back(setup):
+    """The reason valid_until exists: a restored backup or a re-ingest can put
+    the subject's records back after a truthful certificate was issued."""
+    conn, _ = setup
+    lethe = _lethe_with_retention(conn)
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    lethe.forget("user-1", request_id="req-1")
+    assert lethe.reverify("user-1")["still_absent"] is True
+
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO test_vectors (id, body) VALUES ('r1', 'restored')")
+    conn.commit()
+
+    result = lethe.reverify("user-1")
+    assert result["still_absent"] is False
+    assert result["layers"][0]["residual_count"] == 1
+
+
+def test_retention_does_not_resurrect_the_provenance_map(setup):
+    """Retained ids live in their own table and must never be mistaken for live
+    provenance — a second forget must not re-delete from them."""
+    conn, _ = setup
+    lethe = _lethe_with_retention(conn)
+    lethe.tag("user-1", "pgvector", "test_vectors", "r1")
+    lethe.forget("user-1", request_id="req-1")
+
+    assert lethe.ledger.lookup(lethe._subject_hash("user-1")) == []
+    assert len(lethe.ledger.retained(lethe._subject_hash("user-1"))) == 1
+    # Nothing tagged now, so a second forget finds no layers and cannot certify.
+    second = lethe.forget("user-1", request_id="req-2")
+    assert second.payload["layers_found"] == 0
+    assert second.payload["all_verified"] is False
+
+
+# --- reconciliation: what the store holds vs what the ledger knows ---
+
+
+@pytest.fixture
+def owned_table(conn):
+    """A store table with a subject column, as a real deployment would have."""
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS owned_docs CASCADE")
+        cur.execute(
+            "CREATE TABLE owned_docs (id TEXT PRIMARY KEY, owner TEXT, body TEXT)"
+        )
+        cur.executemany(
+            "INSERT INTO owned_docs (id, owner, body) VALUES (%s, %s, %s)",
+            [("d1", "user-1", "a"), ("d2", "user-1", "b"), ("d3", "user-2", "c")],
+        )
+    conn.commit()
+    return conn
+
+
+def test_reconcile_finds_records_that_bypassed_the_wrapper(setup, owned_table):
+    """The coverage gap the ledger structurally cannot see: d2 was written
+    straight to the store, so forget() would never have touched it and the
+    certificate would still have said all_verified."""
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")  # only d1 is tracked
+
+    result = lethe.reconcile("user-1", targets=[("pgvector", "owned_docs", "owner")])
+
+    layer = result["layers"][0]
+    assert layer["scanned"] is True
+    assert layer["found_in_store"] == 2      # d1 and d2 belong to user-1
+    assert layer["tracked_in_ledger"] == 1   # only d1 was tagged
+    assert layer["untracked"] == ["d2"]
+    assert result["untracked_total"] == 1
+    assert result["clean"] is False
+    # Detection is non-mutating by default.
+    assert result["tagged_untracked"] is False
+    assert {r.record_id for r in lethe.ledger.lookup(lethe._subject_hash("user-1"))} == {"d1"}
+
+
+def test_reconcile_can_remediate_then_forget_deletes_everything(setup, owned_table):
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")
+
+    result = lethe.reconcile(
+        "user-1", targets=[("pgvector", "owned_docs", "owner")], tag_untracked=True
+    )
+    assert result["tagged_untracked"] is True
+
+    cert = lethe.forget("user-1", request_id="req-1")
+    assert cert.payload["all_verified"] is True
+    assert cert.payload["records_deleted"] == 2
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM owned_docs")
+        assert {r[0] for r in cur.fetchall()} == {"d3"}  # user-2 untouched
+
+
+def test_reconcile_is_clean_only_when_everything_was_tracked(setup, owned_table):
+    conn, lethe = setup
+    lethe.tag("user-1", "pgvector", "owned_docs", "d1")
+    lethe.tag("user-1", "pgvector", "owned_docs", "d2")
+
+    result = lethe.reconcile("user-1", targets=[("pgvector", "owned_docs", "owner")])
+    assert result["untracked_total"] == 0
+    assert result["clean"] is True
+
+
+def test_unscannable_layer_is_never_reported_clean(setup, owned_table):
+    """A layer Lethe could not look at must not read as 'nothing untracked' —
+    that would be the exact overstatement reconcile exists to prevent."""
+    conn, lethe = setup
+    result = lethe.reconcile("user-1", targets=[("nonexistent", "owned_docs", "owner")])
+
+    layer = result["layers"][0]
+    assert layer["scanned"] is False
+    assert layer["untracked"] is None
+    assert "no configured connector" in layer["reason"]
+    assert result["untracked_total"] == 0   # nothing found, because nothing looked
+    assert result["clean"] is False         # but that is NOT clean

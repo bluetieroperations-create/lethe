@@ -1,0 +1,43 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Newly published queries find issue classes in code that has not changed.
+  # For a tool whose subject is security, a scan that only runs on diffs misses
+  # the case where the world learns something new about code already merged.
+  schedule:
+    - cron: "27 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze Python
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # required to upload results
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          # security-extended over the default suite: this codebase's risk sits
+          # in SQL identifier handling, ASN.1 parsing of untrusted responses,
+          # and signature verification, and the extra queries cover more of
+          # that ground at the cost of some findings to triage.
+          queries: security-extended
+
+      # No build step: CodeQL analyses Python from source.
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"

@@ -1,6 +1,6 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from .audit import AuditLog
 from .certificate import build_certificate
@@ -22,6 +22,7 @@ class Lethe:
         connectors: dict[str, Connector],
         salt: str,
         cert_validity: timedelta = timedelta(days=30),
+        retain_verification_ids: bool = False,
     ):
         self.ledger = ledger
         self.audit = audit
@@ -32,6 +33,12 @@ class Lethe:
         # is asserted; past valid_until a reader should re-verify. Operator
         # policy — override per-call with forget(valid_for=...).
         self.cert_validity = cert_validity
+        # Keep the deleted record ids so reverify() can re-query them after
+        # valid_until lapses. Off by default: the certificate advises
+        # re-verification, but retaining identifiers tied to a subject you just
+        # erased is a real privacy cost, so it is the operator's decision. The
+        # certificate records which way it was set.
+        self.retain_verification_ids = retain_verification_ids
 
     def _subject_hash(self, subject_id: str) -> str:
         return hash_subject(subject_id, self.salt)
@@ -71,7 +78,7 @@ class Lethe:
     ) -> Certificate:
         subject_hash = self._subject_hash(subject_id)
         request_id = request_id or str(uuid.uuid4())
-        now_dt = now if now is not None else datetime.now(timezone.utc)
+        now_dt = now if now is not None else datetime.now(UTC)
         issued_at = now_dt.isoformat()
         # NB: `valid_for or self.cert_validity` is WRONG — timedelta(0) is falsy,
         # so an explicit zero/near-zero window would silently coalesce to the
@@ -85,9 +92,13 @@ class Lethe:
             groups[(row.store, row.namespace)].append(row.record_id)
 
         # Pre-flight audit event: a mid-loop connector failure must never
-        # leave real deletions with no audit trace; the started/completed
-        # pair brackets every destructive attempt.
-        self.audit.append(
+        # leave real deletions with no audit trace; the started/completed pair
+        # brackets every destructive attempt. Its hash is also the chain tip
+        # this run starts from — binding it into the signed certificate ties
+        # the cert to a position in the tamper-evident chain, and the
+        # completion entry below chains forward from here carrying the cert's
+        # payload_hash, so cert and chain point at each other.
+        audit_head = self.audit.append(
             {
                 "event": "forget_started",
                 "request_id": request_id,
@@ -155,6 +166,8 @@ class Lethe:
             # sweep. A tagged store missing a connector is still recorded (as an
             # unhandled layer); declared_scope names the full configured set.
             declared_scope=list(self.connectors.keys()),
+            audit_head=audit_head,
+            reverifiable=self.retain_verification_ids,
         )
 
         self.audit.append(
@@ -171,6 +184,153 @@ class Lethe:
         # Only purge the provenance map once deletion is fully verified — otherwise
         # we keep the map so the operation can be retried.
         if cert.payload["all_verified"]:
+            # Retention must happen BEFORE the purge it is copying from.
+            if self.retain_verification_ids:
+                self.ledger.retain_for_reverification(subject_hash, request_id)
             self.ledger.purge(subject_hash)
 
         return cert
+
+    def reverify(self, subject_id: str) -> dict:
+        """Re-query the stores for a subject whose forget already completed.
+
+        The certificate asserts absence only up to valid_until and advises
+        re-verifying past it. That is possible only when the deployment opted
+        into retain_verification_ids — otherwise forget() purged the record ids
+        a re-query would need, and this reports that honestly instead of
+        returning a hollow "absent" derived from having nothing to check.
+        """
+        subject_hash = self._subject_hash(subject_id)
+        retained = self.ledger.retained(subject_hash)
+        if not retained:
+            return {
+                "subject_hash": subject_hash,
+                "reverifiable": False,
+                "reason": (
+                    "no retained record ids for this subject — either no forget has "
+                    "completed, or the deployment did not set retain_verification_ids"
+                ),
+                "layers": [],
+                "still_absent": None,
+            }
+
+        groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for row in retained:
+            groups[(row.store, row.namespace)].append(row.record_id)
+
+        layers = []
+        for (store, namespace), ids in sorted(groups.items()):
+            connector = self.connectors.get(store)
+            if connector is None:
+                layers.append({
+                    "store": store, "namespace": namespace, "handled": False,
+                    "absent": None, "residual_count": None,
+                    "verify_method": None,
+                })
+                continue
+            if hasattr(connector, "verify_detail"):
+                vr = connector.verify_detail(namespace, ids)
+                absent, residual, method = vr.absent, vr.residual_count, vr.method
+            else:
+                absent = connector.verify(namespace, ids)
+                residual, method = None, "boolean-verify (no verify_detail)"
+            layers.append({
+                "store": store, "namespace": namespace, "handled": True,
+                "absent": absent, "residual_count": residual,
+                "verify_method": method,
+            })
+
+        # Unknown (an unhandled layer) must never read as absent.
+        still_absent = all(lyr["absent"] is True for lyr in layers) if layers else False
+        self.audit.append({
+            "event": "reverify",
+            "subject_hash": subject_hash,
+            "checked_at": datetime.now(UTC).isoformat(),
+            "still_absent": still_absent,
+        })
+        return {
+            "subject_hash": subject_hash,
+            "reverifiable": True,
+            "reason": None,
+            "layers": layers,
+            "still_absent": still_absent,
+        }
+
+    def reconcile(
+        self,
+        subject_id: str,
+        *,
+        targets: list[tuple[str, str, str]],
+        tag_untracked: bool = False,
+    ) -> dict:
+        """Compare what a store actually holds for a subject against what the
+        ledger knows about.
+
+        forget() deletes exactly what the provenance ledger tagged, so a write
+        that bypassed the wrapper is invisible to it — and a certificate can
+        still read all_verified because every layer Lethe *knew about* was
+        verified. This asks the stores directly instead.
+
+        `targets` are (store, namespace, subject_field) triples: Lethe does not
+        know your schema, so the caller names the column/field holding the data
+        subject. Note this searches by the RAW subject id, because that is what
+        the store holds — the ledger holds only its keyed hash.
+
+        With `tag_untracked=True`, anything found untracked is tagged into the
+        ledger so a subsequent forget() will delete and certify it. Detection is
+        the default; remediation mutates the ledger and is opt-in.
+        """
+        subject_hash = self._subject_hash(subject_id)
+        tracked: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for row in self.ledger.lookup(subject_hash):
+            tracked[(row.store, row.namespace)].add(row.record_id)
+
+        layers = []
+        total_untracked = 0
+        for store, namespace, subject_field in targets:
+            connector = self.connectors.get(store)
+            if connector is None or not hasattr(connector, "scan"):
+                # Unscannable is NOT clean: a layer we could not look at must
+                # never be reported as having nothing untracked.
+                layers.append({
+                    "store": store, "namespace": namespace, "scanned": False,
+                    "reason": (
+                        "no configured connector" if connector is None
+                        else f"connector '{store}' does not implement scan()"
+                    ),
+                    "found_in_store": None, "tracked_in_ledger": None,
+                    "untracked": None,
+                })
+                continue
+            found = connector.scan(namespace, subject_field, subject_id)
+            known = tracked.get((store, namespace), set())
+            untracked = sorted(set(found) - known)
+            total_untracked += len(untracked)
+            if tag_untracked:
+                for record_id in untracked:
+                    self.tag(subject_id, store, namespace, record_id)
+            layers.append({
+                "store": store, "namespace": namespace, "scanned": True,
+                "reason": None,
+                "found_in_store": len(found), "tracked_in_ledger": len(known),
+                "untracked": untracked,
+            })
+
+        all_scanned = all(lyr["scanned"] for lyr in layers) if layers else False
+        self.audit.append({
+            "event": "reconcile",
+            "subject_hash": subject_hash,
+            "checked_at": datetime.now(UTC).isoformat(),
+            "targets": len(targets),
+            "untracked_found": total_untracked,
+            "tagged": bool(tag_untracked and total_untracked),
+        })
+        return {
+            "subject_hash": subject_hash,
+            "layers": layers,
+            "untracked_total": total_untracked,
+            # Clean only if every target was actually scanned AND nothing was
+            # found untracked. A partial scan can never certify cleanliness.
+            "clean": all_scanned and total_untracked == 0,
+            "tagged_untracked": bool(tag_untracked and total_untracked),
+        }

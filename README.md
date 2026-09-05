@@ -1,5 +1,7 @@
 # Lethe — the forget button for AI
 
+[![CI](https://github.com/bluetieroperations-create/lethe/actions/workflows/ci.yml/badge.svg)](https://github.com/bluetieroperations-create/lethe/actions/workflows/ci.yml)
+
 **Everyone built AI memory. Nobody built the provable delete.** Lethe deletes a
 person's data from your AI memory (vector store, RAG index, caches, logs) on a
 GDPR/CCPA request — and hands you a **signed certificate** proving it happened.
@@ -7,11 +9,12 @@ GDPR/CCPA request — and hands you a **signed certificate** proving it happened
 Self-hosted: Lethe runs inside *your* infrastructure. The tool that erases your
 data never becomes a new place your data goes.
 
-> **Status:** v0.1, early but real. Connectors: **pgvector** + **Pinecone**.
+> **Status:** v0.2, early but real. Connectors: **pgvector** + **Pinecone**.
 > The full delete loop is tested end-to-end against real Postgres (pgvector);
 > the Pinecone connector is unit-tested against a mock `Index`, not live
 > Pinecone. Hardened through four rounds of adversarial self-review (internal,
-> not third-party). Not yet on PyPI.
+> not third-party). Not published to PyPI yet — install from source (see
+> Quickstart).
 
 ---
 
@@ -101,7 +104,7 @@ assert verify_certificate(cert, trusted_public_key=PUBLISHED_PUBKEY)
 
 ## The certificate
 
-Ed25519-signed, tamper-evident, independently verifiable (schema `lethe.cert/2`).
+Ed25519-signed, tamper-evident, independently verifiable (schema `lethe.cert/3`).
 It states exactly what happened and **scopes its claim honestly** — *"deleted
 across these retrieval layers and verified absent,"* never "perfectly erased
 everywhere" (backups and model weights are out of scope by definition).
@@ -110,7 +113,7 @@ after deleting and saw the records gone *at issue time* — it is not a guarante
 against read replicas, query caches, or asynchronous propagation (notably
 Pinecone, whose deletes are eventually consistent).
 
-The v2 certificate carries the **evidence**, not just the boolean:
+The certificate carries the **evidence**, not just the boolean:
 
 - **`valid_until`** — the absence is asserted from `issued_at` up to this time; a
   deletion cert is not eternal, so re-verify past it (the underlying index can
@@ -120,14 +123,35 @@ The v2 certificate carries the **evidence**, not just the boolean:
 - per-layer **`residual_count`** + **`verify_method`** — how many records the
   post-delete re-query still found (`0` backs `verified_absent`) and the exact
   query that produced it. `index_version` is a nullable slot for a store-native
-  index fingerprint. Older `lethe.cert/1` certificates still verify.
+  index fingerprint.
+- **`key_id`** — which key epoch signed this, derived from the public key and
+  re-checked at verification, so rotating keys never orphans old certificates.
+  See [docs/key-rotation.md](docs/key-rotation.md).
+- **`audit_head`** — the audit-chain position this deletion run started from, so
+  the certificate and the tamper-evident log point at each other.
+- **`reverifiable`** — whether the issuer retained what a later re-query needs
+  (see `lethe reverify`); the re-verify advice is scoped to it.
+- **`timestamp`** — reserved slot for external corroboration of `issued_at`
+  (e.g. RFC 3161). **Always `null` today**, and the claim says so: absent it,
+  `issued_at` is the issuer's own clock.
+
+Older `lethe.cert/1` and `lethe.cert/2` certificates still verify.
+
+**Read [docs/threat-model.md](docs/threat-model.md) before relying on a
+certificate.** It sets out who you must trust and what stays true when they are
+dishonest — in particular that Lethe is self-attestation, so a certificate
+proves far more against a third party than against the operator who issued it.
 
 ```json
 {
-  "schema": "lethe.cert/2",
+  "schema": "lethe.cert/3",
   "all_verified": true,
   "records_deleted": 2,
   "valid_until": "2026-07-21T00:00:00+00:00",
+  "key_id": "ed25519:3f9c1a2b…",
+  "audit_head": "9d4f…",
+  "timestamp": null,
+  "reverifiable": false,
   "declared_scope": ["pgvector", "pinecone"],
   "layers": [{"store": "pgvector", "namespace": "docs",
               "deleted_count": 2, "verified_absent": true, "erased": true,
@@ -147,6 +171,9 @@ The v2 certificate carries the **evidence**, not just the boolean:
 | `lethe init-db` | Create Lethe's ledger + audit tables in your Postgres |
 | `lethe forget SUBJECT` | Delete a subject everywhere; prints the signed certificate |
 | `lethe verify CERT --public-key PUB` | Verify a certificate against the operator's published key |
+| `lethe reconcile SUBJECT --target STORE:NS:FIELD` | Ask the stores what they hold for a subject, vs what the ledger knows |
+| `lethe reverify SUBJECT` | Re-check absence after `valid_until` (needs `retain_verification_ids`) |
+| `lethe anchor` | Timestamp the audit head with an RFC 3161 authority (run on a schedule) |
 | `lethe audit-head` | Print the audit-log tip hash (record it out-of-band) |
 | `lethe verify-audit --expected-head H` | Detect tampering/truncation of the audit log |
 
@@ -179,9 +206,18 @@ operator's published public key to pin against). Full guide:
   recording `lethe audit-head` out-of-band and checking `verify-audit
   --expected-head`.
 - **Coverage = what flows through Lethe.** Writes that bypass the wrapper/`tag`
-  aren't tracked. Wrap your store, or tag explicitly.
-- **Pre-existing data** (written before you adopted Lethe) needs retroactive
-  discovery — on the roadmap, not in v0.1.
+  aren't tracked, so `all_verified` means *"everything Lethe was told about is
+  gone"* — never *"nothing about this person remains"*. `lethe reconcile` asks
+  the store directly and reports what the ledger never saw; it is a detection
+  tool, not a guarantee.
+- **Pre-existing data** (written before you adopted Lethe) is found by
+  `lethe reconcile` where the store exposes a queryable subject field, and can
+  be tagged for deletion with `--tag-untracked`.
+- **Self-attestation, unless you anchor.** The operator signs their own
+  certificate and `issued_at` is their own clock. `lethe anchor` timestamps the
+  audit head with an external RFC 3161 authority, which closes backdating; see
+  [docs/anchoring.md](docs/anchoring.md) for what it does and does not prove,
+  and [docs/threat-model.md](docs/threat-model.md) for the wider picture.
 - **Not erasure from backups or model weights.** Out of scope by design; the
   certificate says so.
 
@@ -190,7 +226,9 @@ operator's published public key to pin against). Full guide:
 - **pgvector** (and any Postgres table) — `PgVectorConnector`
 - **Pinecone** — `PineconeConnector` (pass your `Index`). Note: Pinecone
   deletes are eventually consistent, so `verified_absent` is asserted at issue
-  time against the queried endpoint, not proven across replicas.
+  time against the queried endpoint, not proven across replicas. Covered by
+  unit tests against a fake `Index` plus a live integration test against real
+  Pinecone (`pytest -m live`, needs `PINECONE_API_KEY`).
 - Roadmap: Weaviate, Qdrant, Redis, conversation logs.
 
 ## License

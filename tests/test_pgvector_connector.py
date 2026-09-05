@@ -1,3 +1,4 @@
+import psycopg
 import pytest
 
 from lethe.connectors.pgvector import PgVectorConnector
@@ -45,9 +46,31 @@ def test_empty_ids_are_noops(vectors):
 def test_namespace_is_safely_quoted(vectors):
     # A malicious namespace must not execute as SQL; it should error as a missing table.
     c = PgVectorConnector(vectors)
-    with pytest.raises(Exception):
+    with pytest.raises(psycopg.errors.UndefinedTable):
         c.delete("test_vectors; DROP TABLE test_vectors", ["r1"])
     vectors.rollback()
     with vectors.cursor() as cur:
         cur.execute("SELECT count(*) FROM test_vectors")
         assert cur.fetchone()[0] == 3  # table untouched
+
+
+def test_scan_finds_records_by_subject_field(conn):
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS owned CASCADE")
+        cur.execute("CREATE TABLE owned (id TEXT PRIMARY KEY, owner TEXT)")
+        cur.executemany(
+            "INSERT INTO owned (id, owner) VALUES (%s, %s)",
+            [("a", "u1"), ("b", "u1"), ("c", "u2")],
+        )
+    conn.commit()
+    c = PgVectorConnector(conn)
+    assert sorted(c.scan("owned", "owner", "u1")) == ["a", "b"]
+    assert c.scan("owned", "owner", "nobody") == []
+
+
+def test_scan_quotes_identifiers(conn):
+    """namespace and subject_field are identifiers, not interpolated text."""
+    c = PgVectorConnector(conn)
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        c.scan("owned; DROP TABLE owned", "owner", "u1")
+    conn.rollback()

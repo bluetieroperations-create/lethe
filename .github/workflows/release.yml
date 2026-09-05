@@ -1,0 +1,81 @@
+name: Release
+
+# Tagging is the deliberate act; this turns the tag into a published Release so
+# the two can never drift (v0.2.0 was tagged and then never released).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The tag is the release's identity. If it disagrees with the packaged
+      # version, the artifact and its label describe different things — the
+      # same drift that left test_version asserting 0.1.0 for two months after
+      # the 0.2.0 release. Fail before anything is published.
+      - name: Tag matches the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          # Read version.py directly rather than importing it: importing the
+          # package pulls lethe/__init__.py -> core -> psycopg, which is not
+          # installed on a bare runner. This step must not need the deps.
+          pkg="$(python -c 'import re, pathlib; print(re.search(r"__version__\s*=\s*[\"\x27]([^\"\x27]+)", pathlib.Path("lethe/version.py").read_text()).group(1))')"
+          echo "tag=$tag packaged=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match lethe/version.py ($pkg)"
+            exit 1
+          fi
+          echo "VERSION=$pkg" >> "$GITHUB_ENV"
+
+      # Notes come from the CHANGELOG so the release and the changelog cannot
+      # tell different stories. A missing or still-unreleased section fails the
+      # build rather than publishing an empty or contradictory release.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python - <<'PY' > release-notes.md
+          import os, pathlib, re, sys
+
+          version = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)"
+          match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+          if match is None:
+              sys.exit(f"CHANGELOG.md has no section for [{version}]")
+
+          heading = re.search(rf"^## \[{re.escape(version)}\][^\n]*", text, re.MULTILINE).group(0)
+          if "unreleased" in heading.lower():
+              sys.exit(
+                  f"CHANGELOG.md still marks [{version}] unreleased; "
+                  "finalise the section before tagging"
+              )
+
+          body = match.group(1).strip()
+          if not body:
+              sys.exit(f"CHANGELOG.md section for [{version}] is empty")
+          print(body)
+          PY
+          echo "--- notes preview ---"
+          head -20 release-notes.md
+
+      # gh is preinstalled on GitHub runners and uses the built-in token. No
+      # third-party action is used here deliberately: a release job holds
+      # contents:write, and this project should not hand that to a
+      # supply-chain dependency it does not need.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

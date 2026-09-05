@@ -133,7 +133,7 @@ def test_audit_failure_after_delete_does_not_yield_a_later_false_certificate(env
         # this run never actually deleted.
         assert not (
             cert2.payload["all_verified"]
-            and all(l["deleted_count"] == 0 for l in cert2.payload["layers"])
+            and all(lyr["deleted_count"] == 0 for lyr in cert2.payload["layers"])
             and cert2.payload["layers"]
         ), "retry produced a verified cert with zero real deletions (false certification)"
 

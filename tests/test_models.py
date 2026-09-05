@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from lethe.models import Certificate, LayerResult, TagRecord
@@ -10,14 +12,16 @@ def test_tag_record_fields():
 
 
 def test_layer_result_fields():
-    l = LayerResult(store="pgvector", namespace="docs", deleted_count=3, verified_absent=True)
-    assert l.deleted_count == 3
-    assert l.verified_absent is True
+    layer = LayerResult(
+        store="pgvector", namespace="docs", deleted_count=3, verified_absent=True
+    )
+    assert layer.deleted_count == 3
+    assert layer.verified_absent is True
 
 
 def test_models_are_frozen():
     t = TagRecord(subject_hash="abc", store="pgvector", namespace="docs", record_id="r1")
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         t.store = "redis"
 
 

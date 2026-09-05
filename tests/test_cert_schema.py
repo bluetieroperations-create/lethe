@@ -1,3 +1,4 @@
+import base64
 import hashlib
 
 from lethe.cert_schema import schema_errors, verify_certificate_json
@@ -8,7 +9,7 @@ from lethe.signing import Signer
 
 def _v1_payload() -> dict:
     """A genuine v1 payload, exactly matching schemas/certificate-v1.json (no v2
-    fields). Hand-built because build_certificate now always emits v2."""
+    or v3 fields). Hand-built because build_certificate now always emits v3."""
     return {
         "schema": "lethe.cert/1",
         "request_id": "req-1", "subject_hash": "subjA",
@@ -34,6 +35,62 @@ def _signed_v1() -> tuple[dict, str]:
         "public_key": signer.public_key_b64(),
     }
     return cert, signer.public_key_b64()
+
+
+def _v2_payload() -> dict:
+    """A genuine v2 payload, exactly matching schemas/certificate-v2.json (no v3
+    fields). Hand-built because build_certificate now always emits v3."""
+    return {
+        "schema": "lethe.cert/2",
+        "request_id": "req-1", "subject_hash": "subjA",
+        "issued_at": "2026-06-21T00:00:00+00:00",
+        "valid_until": "2026-07-21T00:00:00+00:00",
+        "lethe_version": "0.2.0", "claim": "legacy v2 claim",
+        "declared_scope": ["pgvector"], "all_verified": True,
+        "layers_found": 1, "records_deleted": 1, "all_layers_handled": True,
+        "layers": [{
+            "store": "pgvector", "namespace": "docs", "deleted_count": 1,
+            "verified_absent": True, "requested_count": 1, "handled": True,
+            "erased": True, "residual_count": 0,
+            "verify_method": "pgvector: SELECT count(*) WHERE id = ANY(:ids); n_ids=1",
+            "index_version": None,
+        }],
+    }
+
+
+def _signed_v2() -> tuple[dict, str]:
+    signer = Signer.generate()
+    payload = _v2_payload()
+    data = canonical_payload_bytes(payload)
+    cert = {
+        "payload": payload,
+        "payload_hash": hashlib.sha256(data).hexdigest(),
+        "signature": signer.sign(data),
+        "public_key": signer.public_key_b64(),
+    }
+    return cert, signer.public_key_b64()
+
+
+def test_v2_certificate_still_validates_and_verifies():
+    """Backward-compat: v2 predates key_id, so the v3 key_id check must not
+    reject a cert that legitimately has none."""
+    cert, pub = _signed_v2()
+    assert schema_errors(cert) == []
+    assert verify_certificate_json(cert, trusted_public_key=pub) == {
+        "valid": True, "reasons": [], "detail": []
+    }
+
+
+def test_v2_declared_cert_carrying_v3_field_is_rejected():
+    """Same downgrade defense one version up: a cert declaring v2 must not be
+    able to carry v3-only fields (v2 additionalProperties:false)."""
+    cert, pub = _signed_v2()
+    cert["payload"]["key_id"] = "ed25519:" + "0" * 32  # v3-only field
+    errors = schema_errors(cert)
+    assert errors, "v2 schema accepted a v3-only field"
+    assert verify_certificate_json(cert, trusted_public_key=pub)["reasons"] == [
+        "SCHEMA_MISMATCH"
+    ]
 
 
 def test_v1_certificate_still_validates_and_verifies():
@@ -149,11 +206,25 @@ def test_verify_json_key_mismatch_on_forged_cert():
     assert result["reasons"] == ["KEY_MISMATCH"]
 
 
-def test_verify_json_key_substitution_is_bad_signature():
+def test_verify_json_key_substitution_is_key_id_mismatch():
+    """Swapping in another operator's key to satisfy the pin check is now caught
+    by key_id — which is derived from the public key — before the signature is
+    even checked. Stricter and more specific than the old BAD_SIGNATURE."""
     data, _ = _signed_golden()
     _, operator_pub = _signed_golden()
     data["public_key"] = operator_pub  # spoof the pin check
     result = verify_certificate_json(data, trusted_public_key=operator_pub)
+    assert result["reasons"] == ["KEY_ID_MISMATCH"]
+
+
+def test_verify_json_bad_signature_still_reachable():
+    """key_id must not mask a plain signature failure: corrupt only the
+    signature, leaving key and payload internally consistent."""
+    data, pub = _signed_golden()
+    sig = bytearray(base64.b64decode(data["signature"]))
+    sig[0] ^= 0xFF
+    data["signature"] = base64.b64encode(bytes(sig)).decode()
+    result = verify_certificate_json(data, trusted_public_key=pub)
     assert result["reasons"] == ["BAD_SIGNATURE"]
 
 

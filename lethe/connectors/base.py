@@ -31,3 +31,12 @@ class Connector(Protocol):
     # to give the certificate the residual count + query descriptor. It is not
     # part of the required Protocol: a connector that implements only delete()
     # and verify() stays valid, and core.forget falls back to the boolean.
+    #
+    # OPTIONAL: connectors MAY additionally implement
+    #     scan(namespace, subject_field, subject_value) -> list[str]
+    # returning the record ids the STORE itself holds for a subject, found by
+    # store-native search rather than by Lethe's ledger. This is what lets
+    # reconcile() detect records that were written without going through the
+    # wrapper — the coverage gap the ledger structurally cannot see. Not
+    # required: a store with no queryable subject field cannot support it, and
+    # reconcile() reports such a layer as unscannable rather than as clean.
