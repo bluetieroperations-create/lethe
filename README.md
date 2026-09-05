@@ -223,7 +223,9 @@ operator's published public key to pin against). Full guide:
 - **pgvector** (and any Postgres table) — `PgVectorConnector`
 - **Pinecone** — `PineconeConnector` (pass your `Index`). Note: Pinecone
   deletes are eventually consistent, so `verified_absent` is asserted at issue
-  time against the queried endpoint, not proven across replicas.
+  time against the queried endpoint, not proven across replicas. Covered by
+  unit tests against a fake `Index` plus a live integration test against real
+  Pinecone (`pytest -m live`, needs `PINECONE_API_KEY`).
 - Roadmap: Weaviate, Qdrant, Redis, conversation logs.
 
 ## License
