@@ -24,12 +24,29 @@ import base64
 import hashlib
 import secrets
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
 try:
-    from asn1crypto import algos, core, tsp
+    from asn1crypto import algos, cms, core, tsp
+
+    class _TimeStampResp(core.Sequence):
+        """RFC 3161 s2.4.2 response.
+
+        asn1crypto's own `tsp.TimeStampResp` marks `timeStampToken` REQUIRED,
+        but the RFC makes it OPTIONAL — and a rejecting authority omits it. Its
+        spec therefore cannot parse a valid rejection at all, which turned every
+        refusal (rate limit, policy, malformed request) into an opaque
+        "unparseable response". This spec matches the RFC so the real status
+        reaches the operator.
+        """
+
+        _fields = [
+            ("status", tsp.PKIStatusInfo),
+            ("time_stamp_token", cms.ContentInfo, {"optional": True}),
+        ]
 
     _ASN1_IMPORT_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover - exercised by the error path below
@@ -37,6 +54,15 @@ except ImportError as exc:  # pragma: no cover - exercised by the error path bel
 
 # application/timestamp-query per RFC 3161 s3.4.
 _CONTENT_TYPE = "application/timestamp-query"
+
+# urllib speaks file://, ftp:// and more. A TSA endpoint is configuration, but
+# configuration is not always trusted input, and a mistyped or injected scheme
+# should never make the anchor client open a local file.
+_ALLOWED_SCHEMES = ("http", "https")
+
+# A timestamp token is a few KB. Anything vastly larger is a broken or hostile
+# endpoint, and must not be read into memory unbounded.
+_MAX_RESPONSE_BYTES = 1 << 20
 
 # grantedWithMods means the TSA altered the request; the token is valid but no
 # longer answers exactly what was asked. Accept only an unmodified grant.
@@ -77,7 +103,12 @@ def _http_post(url: str, body: bytes, timeout: float) -> bytes:
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+            body = response.read(_MAX_RESPONSE_BYTES + 1)
+        if len(body) > _MAX_RESPONSE_BYTES:
+            raise AnchorError(
+                f"timestamping authority returned more than {_MAX_RESPONSE_BYTES} bytes"
+            )
+        return body
     except urllib.error.URLError as exc:
         # Only the reason is surfaced: a raw URLError can carry the full URL,
         # and a TSA endpoint may embed a customer identifier.
@@ -118,6 +149,11 @@ class Rfc3161Anchor:
             )
         if hash_algorithm not in ("sha256", "sha384", "sha512"):
             raise AnchorError(f"unsupported hash algorithm {hash_algorithm!r}")
+        scheme = urllib.parse.urlparse(url).scheme.lower()
+        if scheme not in _ALLOWED_SCHEMES:
+            raise AnchorError(
+                f"timestamping authority URL must be http or https, got {scheme or 'none'!r}"
+            )
         self.url = url
         self.hash_algorithm = hash_algorithm
         self.timeout = timeout
@@ -149,18 +185,27 @@ class Rfc3161Anchor:
 
     def _parse(self, raw: bytes, *, digest: bytes, nonce: int) -> AnchorResult:
         try:
-            response = tsp.TimeStampResp.load(raw)
+            response = _TimeStampResp.load(raw)
             status = response["status"]["status"].native
-            token = response["time_stamp_token"]
-            info = token["content"]["encap_content_info"]["content"].parsed
         except Exception as exc:
             raise AnchorError(
                 f"timestamping authority returned an unparseable response "
                 f"({type(exc).__name__})"
             ) from None
 
+        # Read BEFORE the token is touched: a refusal legitimately carries no
+        # token, so parsing first reports "unparseable" for what is really a
+        # rate limit or a policy refusal.
         if status != _GRANTED:
             raise AnchorError(f"timestamping authority refused the request (status {status!r})")
+
+        try:
+            info = response["time_stamp_token"]["content"]["encap_content_info"]["content"].parsed
+        except Exception as exc:
+            raise AnchorError(
+                f"timestamping authority granted the request but returned an "
+                f"unparseable token ({type(exc).__name__})"
+            ) from None
         if info["nonce"].native != nonce:
             raise AnchorError("timestamp nonce mismatch — response is not for this request")
         if info["message_imprint"]["hashed_message"].native != digest:

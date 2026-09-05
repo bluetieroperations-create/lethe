@@ -108,6 +108,49 @@ def test_unsupported_hash_algorithm_is_refused_up_front():
         Rfc3161Anchor("https://tsa.example/tsr", hash_algorithm="md5")
 
 
+# --- audit findings (regression) ---
+
+
+# A genuine RFC 3161 rejection: TimeStampResp with status only. The RFC makes
+# timeStampToken OPTIONAL and a refusing authority omits it. Hand-built DER,
+# because asn1crypto's own spec refuses to construct (or parse) one.
+_REJECTION_NO_TOKEN = bytes([0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02])
+
+
+def test_refusal_without_a_token_reports_the_refusal():
+    """Regression: asn1crypto marks timeStampToken required, so parsing a real
+    rejection raised and every refusal — a rate limit, a policy denial —
+    surfaced as an opaque 'unparseable response'. The operator must be told
+    what actually happened."""
+    anchor = Rfc3161Anchor("https://tsa.example/tsr", transport=lambda u, b: _REJECTION_NO_TOKEN)
+    with pytest.raises(AnchorError, match="refused"):
+        anchor.anchor(b"the-audit-head")
+
+
+def test_non_http_authority_url_is_refused():
+    """Regression: urllib speaks file:// and ftp://. A mistyped or injected
+    --tsa value must never make the client open a local file."""
+    with pytest.raises(AnchorError, match="must be http or https"):
+        Rfc3161Anchor("file:///etc/passwd")
+    with pytest.raises(AnchorError, match="must be http or https"):
+        Rfc3161Anchor("/not/a/url")
+
+
+def test_http_and_https_authorities_are_accepted():
+    assert Rfc3161Anchor("http://tsa.example/tsr").url == "http://tsa.example/tsr"
+    assert Rfc3161Anchor("HTTPS://tsa.example/tsr").url == "HTTPS://tsa.example/tsr"
+
+
+def test_granted_response_with_a_broken_token_is_distinguishable():
+    """A refusal and a granted-but-corrupt token are different failures and
+    must not share one message."""
+    # status=granted (0), but no token follows.
+    granted_bad_token = bytes([0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x00])
+    anchor = Rfc3161Anchor("https://tsa.example/tsr", transport=lambda u, b: granted_bad_token)
+    with pytest.raises(AnchorError, match="unparseable token"):
+        anchor.anchor(b"the-audit-head")
+
+
 # --- audit-chain integration (needs the test database) ---
 
 
