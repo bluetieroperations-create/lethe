@@ -9,7 +9,7 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-09-05
 
 Version 0.2.1 was prepared but never tagged or published; its contents are
 included here.
@@ -52,6 +52,10 @@ included here.
 - **`SECURITY.md`** — private vulnerability reporting and scope.
 - **CI** — GitHub Actions on Python 3.11 and 3.12 against a real Postgres
   service, including a guard that fails the build if any test is skipped.
+- **Release workflow** — pushing a `v*` tag publishes the GitHub Release, with
+  notes taken from this file. It refuses to publish if the tag disagrees with
+  `lethe/version.py`, or if the changelog section is missing or still marked
+  unreleased, so a tag and its release cannot describe different things.
 
 ### Changed
 
@@ -120,5 +124,5 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
-[0.3.0]: https://github.com/bluetieroperations-create/lethe/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.2.0
