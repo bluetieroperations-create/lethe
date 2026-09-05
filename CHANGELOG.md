@@ -32,6 +32,15 @@ that issued it.
   would then honour. `reconcile` validates every target before scanning, so a
   refusal cannot leave a partial remediation.
 
+  **`forget()` enforces it too**, not only `tag()`. A ledger row can predate
+  the allowlist, or be written by anything with SQL access to
+  `lethe_provenance`, and the delete path is the one that matters. A layer
+  outside the allowlist is recorded as unhandled — the same shape as a store
+  with no configured connector — so `all_verified` goes False and the
+  certificate reports that a layer was found and deliberately not swept, rather
+  than omitting it. Allowed layers in the same run are still swept; the ledger
+  is preserved so an operator can fix the configuration and retry.
+
   **Unset means unrestricted**, preserving existing behaviour on upgrade — but
   a value that is set and empty is a misconfiguration, not a way to say "allow
   nothing", because running unrestricted due to a variable expanding to nothing

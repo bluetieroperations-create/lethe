@@ -133,9 +133,16 @@ only the stores Lethe was set up to sweep. The resulting certificate is
 hard to notice: nothing malfunctions.
 
 **Mitigated by `allowed_namespaces` / `LETHE_ALLOWED_NAMESPACES`**, which names
-the `(store, namespace)` pairs a deployment may ever tag. It is enforced in
-`Lethe.tag`, not at the MCP boundary, so the CLI, the library and
-`reconcile(tag_untracked=True)` are covered by the same rule.
+the `(store, namespace)` pairs a deployment may ever tag — and ever delete
+from. It is enforced in `Lethe.tag`, not at the MCP boundary, so the CLI, the
+library and `reconcile(tag_untracked=True)` are covered by the same rule.
+
+`forget()` checks it as well, because the ledger is not a trusted input: a row
+can predate the allowlist, or be written by anything holding SQL access to
+`lethe_provenance`. A layer outside the allowlist is recorded as unhandled, so
+`all_verified` goes False and the certificate states that a layer was found and
+not swept — Lethe refuses to certify an erasure it deliberately declined to
+perform.
 
 It is **unset by default**, meaning unrestricted, so that upgrading cannot
 silently start rejecting a deployment's real traffic. Set it. `lethe_status`

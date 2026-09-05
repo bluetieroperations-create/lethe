@@ -184,3 +184,64 @@ def test_malformed_allowlist_env_fails_server_startup(tmp_path):
     }
     with pytest.raises(ConfigError, match="STORE:NAMESPACE"):
         build_context(environ=env)
+
+
+# --- the allowlist must bound DELETION, not merely tagging ---
+
+
+def test_forget_refuses_a_ledger_entry_outside_the_allowlist(tables):
+    """A ledger row can predate the allowlist, or be written by anything with
+    SQL access to lethe_provenance. forget() reads the ledger, so checking only
+    tag() would leave the delete path unbounded — which is the path that
+    actually matters."""
+    unrestricted = _lethe(tables, None)
+    unrestricted.tag("attacker", "pgvector", "billing", "inv-1")
+
+    restricted = _lethe(tables, {"pgvector": {"docs"}})
+    cert = restricted.forget("attacker")
+
+    assert cert.payload["records_deleted"] == 0
+    # Must not certify erasure for a layer it deliberately refused to touch.
+    assert cert.payload["all_verified"] is False
+    layer = cert.payload["layers"][0]
+    assert layer["handled"] is False
+    assert layer["erased"] is False
+    assert "allowlist" in layer["verify_method"]
+    # Ledger preserved so the operator can fix config and retry.
+    assert len(restricted.ledger.lookup(restricted._subject_hash("attacker"))) == 1
+
+    with tables.cursor() as cur:
+        cur.execute("SELECT id FROM billing")
+        assert [r[0] for r in cur.fetchall()] == ["inv-1"]
+
+
+def test_forget_still_sweeps_the_allowed_layers_alongside_a_refused_one(tables):
+    """Mixed subject: delete what this deployment may, refuse the rest, and say
+    so — the same shape as a store with no configured connector."""
+    unrestricted = _lethe(tables, None)
+    unrestricted.tag("alice", "pgvector", "docs", "d1")
+    unrestricted.tag("alice", "pgvector", "billing", "inv-1")
+
+    restricted = _lethe(tables, {"pgvector": {"docs"}})
+    cert = restricted.forget("alice")
+
+    by_ns = {lyr["namespace"]: lyr for lyr in cert.payload["layers"]}
+    assert by_ns["docs"]["handled"] is True
+    assert by_ns["docs"]["deleted_count"] == 1
+    assert by_ns["billing"]["handled"] is False
+    assert cert.payload["all_verified"] is False
+
+    with tables.cursor() as cur:
+        cur.execute("SELECT id FROM docs")
+        assert cur.fetchall() == []          # allowed layer swept
+        cur.execute("SELECT id FROM billing")
+        assert [r[0] for r in cur.fetchall()] == ["inv-1"]   # refused layer intact
+
+
+def test_unrestricted_forget_is_unchanged(tables):
+    """Backward compatibility on the delete path too."""
+    lethe = _lethe(tables, None)
+    lethe.tag("x", "pgvector", "billing", "inv-1")
+    cert = lethe.forget("x")
+    assert cert.payload["all_verified"] is True
+    assert cert.payload["records_deleted"] == 1

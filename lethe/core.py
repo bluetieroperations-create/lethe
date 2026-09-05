@@ -91,17 +91,23 @@ class Lethe:
     def _subject_hash(self, subject_id: str) -> str:
         return hash_subject(subject_id, self.salt)
 
-    def _check_namespace(self, store: str, namespace: str) -> None:
+    def _namespace_allowed(self, store: str, namespace: str) -> bool:
         if self.allowed_namespaces is None:
+            return True
+        return namespace in self.allowed_namespaces.get(store, set())
+
+    def _check_namespace(self, store: str, namespace: str) -> None:
+        if self._namespace_allowed(store, namespace):
             return
-        if namespace not in self.allowed_namespaces.get(store, set()):
-            allowed = sorted(
-                f"{s}:{n}" for s, ns in self.allowed_namespaces.items() for n in ns
-            )
-            raise NamespaceNotAllowed(
-                f"{store}:{namespace} is not in this deployment's allowed namespaces "
-                f"({', '.join(allowed) or 'none configured'})"
-            )
+        # Reached only when an allowlist is configured, but bind it explicitly
+        # rather than relying on that invariant holding across a refactor of
+        # _namespace_allowed.
+        configured = self.allowed_namespaces or {}
+        allowed = sorted(f"{s}:{n}" for s, ns in configured.items() for n in ns)
+        raise NamespaceNotAllowed(
+            f"{store}:{namespace} is not in this deployment's allowed namespaces "
+            f"({', '.join(allowed) or 'none configured'})"
+        )
 
     def tag(self, subject_id: str, store: str, namespace: str, record_id: str) -> None:
         # Checked BEFORE the ledger write: an entry that should not exist must
@@ -173,6 +179,26 @@ class Lethe:
 
         layers: list[LayerResult] = []
         for (store, namespace), ids in groups.items():
+            # The allowlist bounds DELETION, not merely tagging. A ledger entry
+            # can predate the allowlist, or be written by anything with SQL
+            # access to lethe_provenance, and forget() would otherwise honour
+            # it. Recorded as an unhandled layer — the same shape as a store
+            # with no connector — so all_verified goes False and the
+            # certificate says a layer was found and not swept, rather than
+            # quietly omitting it.
+            if not self._namespace_allowed(store, namespace):
+                layers.append(
+                    LayerResult(
+                        store,
+                        namespace,
+                        deleted_count=0,
+                        verified_absent=False,
+                        requested_count=len(ids),
+                        handled=False,
+                        verify_method="not performed: namespace outside the allowlist",
+                    )
+                )
+                continue
             connector = self.connectors.get(store)
             if connector is None:
                 # A tagged store with no configured connector must NOT crash the
