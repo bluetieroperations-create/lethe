@@ -133,8 +133,8 @@ def test_preview_counts_layers_without_deleting(conn):
 
     assert p["subject_hash"] == lethe._subject_hash("alice@example.com")
     assert p["layers"] == [
-        {"store": "pgvector", "namespace": "chats", "count": 1},
-        {"store": "pgvector", "namespace": "docs", "count": 2},
+        {"store": "pgvector", "namespace": "chats", "count": 1, "allowed": True},
+        {"store": "pgvector", "namespace": "docs", "count": 2, "allowed": True},
     ]
     # read-only: the ledger still holds all three rows
     assert len(ledger.lookup(p["subject_hash"])) == 3

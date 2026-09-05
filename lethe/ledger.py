@@ -88,6 +88,33 @@ class Ledger:
             )
             return [TagRecord(*row) for row in cur.fetchall()]
 
+    def namespaces(self) -> list[tuple[str, str, int]]:
+        """Every (store, namespace) the ledger currently holds, with row counts.
+
+        Lets an operator reconcile what is already tagged against a newly
+        configured allowlist. Configuring an allowlist does not retroactively
+        clean the ledger, and an out-of-policy row left there blocks a subject
+        from ever certifying again — so it has to be visible.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT store, namespace, count(*) FROM lethe_provenance "
+                "GROUP BY store, namespace ORDER BY store, namespace"
+            )
+            return [(row[0], row[1], int(row[2])) for row in cur.fetchall()]
+
+    def purge_namespace(self, store: str, namespace: str) -> int:
+        """Drop every ledger row for a (store, namespace). Removes Lethe's
+        record that these rows exist; it does NOT delete from the store."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM lethe_provenance WHERE store = %s AND namespace = %s",
+                (store, namespace),
+            )
+            n = cur.rowcount
+        self.conn.commit()
+        return n
+
     def purge(self, subject_hash: str) -> int:
         with self.conn.cursor() as cur:
             cur.execute(

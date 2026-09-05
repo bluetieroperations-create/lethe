@@ -49,8 +49,20 @@ that issued it.
   and MCP returns a `NAMESPACE_NOT_ALLOWED` envelope rather than an INTERNAL
   traceback.
 
+- **`lethe ledger-scope`** — lists what the ledger holds against the configured
+  allowlist, and `--purge-disallowed` clears rows outside it (removing Lethe's
+  record that they exist; it does not delete from the store). Configuring an
+  allowlist does not retroactively clean the ledger, and a row tagged before it
+  existed blocks that subject from ever certifying again — so it has to be
+  visible and clearable. Exits non-zero while out-of-policy rows remain.
+
 ### Fixed
 
+- `lethe forget` — the command that actually deletes — did not apply the
+  allowlist at all; it was wired into `reconcile` only.
+- `preview()` (and so `lethe_forget_preview`) did not mark layers that
+  `forget()` will refuse, so the confirm token was minted over a blast radius
+  that misstated what would happen. Layers now carry `allowed`.
 - `build_context` validated the allowlist only after opening a database
   connection. Configuration is now checked before any side effect, so a
   malformed allowlist fails startup rather than leaving a connection open.

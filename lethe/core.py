@@ -132,7 +132,15 @@ class Lethe:
         return {
             "subject_hash": subject_hash,
             "layers": [
-                {"store": store, "namespace": namespace, "count": n}
+                {
+                    "store": store,
+                    "namespace": namespace,
+                    "count": n,
+                    # forget() will refuse a layer outside the allowlist, so a
+                    # preview that did not say so would misstate the blast
+                    # radius the caller is about to confirm.
+                    "allowed": self._namespace_allowed(store, namespace),
+                }
                 for (store, namespace), n in sorted(counts.items())
             ],
         }

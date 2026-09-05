@@ -245,3 +245,116 @@ def test_unrestricted_forget_is_unchanged(tables):
     cert = lethe.forget("x")
     assert cert.payload["all_verified"] is True
     assert cert.payload["records_deleted"] == 1
+
+
+# --- fail-closed on near-miss namespaces ---
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [" docs", "docs ", " docs ", "DOCS", "Docs", "docs\n", "docs​", "doсs", ""],
+)
+def test_near_miss_namespaces_are_refused(tables, namespace):
+    """Exact matching is correct here: psycopg quotes identifiers byte-exactly,
+    so Python equality and Postgres quoted-identifier equality coincide.
+
+    This guards a concrete future bypass. If someone "fixes" the usability
+    complaint by adding .strip() inside _namespace_allowed, then tagging
+    " docs " would be accepted while tag() still stores the unstripped string —
+    and sql.Identifier(" docs ") targets a different table than docs.
+    """
+    lethe = _lethe(tables, {"pgvector": {"docs"}})
+    with pytest.raises(NamespaceNotAllowed):
+        lethe.tag("alice", "pgvector", namespace, "d1")
+
+
+def test_preview_marks_a_layer_that_forget_will_refuse(tables):
+    """The confirm token is minted over what preview reports, so a preview that
+    hid the refusal would misstate the blast radius the caller confirms."""
+    unrestricted = _lethe(tables, None)
+    unrestricted.tag("alice", "pgvector", "docs", "d1")
+    unrestricted.tag("alice", "pgvector", "billing", "inv-1")
+
+    layers = _lethe(tables, {"pgvector": {"docs"}}).preview("alice")["layers"]
+    by_ns = {lyr["namespace"]: lyr for lyr in layers}
+    assert by_ns["docs"]["allowed"] is True
+    assert by_ns["billing"]["allowed"] is False
+
+
+def test_an_out_of_policy_row_blocks_certification_until_it_is_cleared(tables):
+    """The residual this control creates, pinned so it cannot change silently:
+    one poisoned row means the subject never certifies, and the ledger never
+    purges, until an operator clears it."""
+    unrestricted = _lethe(tables, None)
+    unrestricted.tag("alice", "pgvector", "docs", "d1")
+    unrestricted.tag("alice", "pgvector", "billing", "inv-1")
+
+    lethe = _lethe(tables, {"pgvector": {"docs"}})
+    assert lethe.forget("alice").payload["all_verified"] is False
+    # Still stuck on a second attempt — not a transient.
+    assert lethe.forget("alice").payload["all_verified"] is False
+
+    # ledger-scope's remediation is the way out.
+    assert lethe.ledger.purge_namespace("pgvector", "billing") == 1
+    # A real record to erase: d1 was already swept by the first forget, and a
+    # run that deletes nothing cannot certify an erasure either.
+    with tables.cursor() as cur:
+        cur.execute("INSERT INTO docs VALUES ('d2','alice')")
+    tables.commit()
+    lethe.tag("alice", "pgvector", "docs", "d2")
+    assert lethe.forget("alice").payload["all_verified"] is True
+
+
+# --- ledger-scope: seeing and clearing what predates the allowlist ---
+
+
+def test_ledger_namespaces_reports_what_is_tagged(tables):
+    lethe = _lethe(tables, None)
+    lethe.tag("alice", "pgvector", "docs", "d1")
+    lethe.tag("attacker", "pgvector", "billing", "inv-1")
+    assert lethe.ledger.namespaces() == [
+        ("pgvector", "billing", 1),
+        ("pgvector", "docs", 1),
+    ]
+
+
+def test_purge_namespace_clears_only_that_namespace(tables):
+    lethe = _lethe(tables, None)
+    lethe.tag("alice", "pgvector", "docs", "d1")
+    lethe.tag("attacker", "pgvector", "billing", "inv-1")
+    assert lethe.ledger.purge_namespace("pgvector", "billing") == 1
+    assert lethe.ledger.namespaces() == [("pgvector", "docs", 1)]
+    # Purging the ledger record must not touch the store itself.
+    with tables.cursor() as cur:
+        cur.execute("SELECT id FROM billing")
+        assert [r[0] for r in cur.fetchall()] == ["inv-1"]
+
+
+# --- the CLI delete path ---
+
+
+def test_cli_forget_honours_the_allowlist(tables, tmp_path, monkeypatch):
+    """`lethe forget` is the command that deletes, and is what an operator
+    reaches for while cleaning up after an incident."""
+    from click.testing import CliRunner
+
+    from lethe.cli import cli
+
+    _lethe(tables, None).tag("attacker", "pgvector", "billing", "inv-1")
+
+    key = tmp_path / "k.bin"
+    key.write_bytes(Signer.generate().private_bytes())
+    monkeypatch.setenv("LETHE_ALLOWED_NAMESPACES", "pgvector:documents")
+
+    dsn = tables.info.dsn
+    result = CliRunner().invoke(
+        cli,
+        ["forget", "attacker", "--database-url", dsn, "--salt", "s",
+         "--key-file", str(key)],
+    )
+    assert result.exit_code == 0, result.output
+    assert '"all_verified": false' in result.output.lower()
+
+    with tables.cursor() as cur:
+        cur.execute("SELECT id FROM billing")
+        assert [r[0] for r in cur.fetchall()] == ["inv-1"]

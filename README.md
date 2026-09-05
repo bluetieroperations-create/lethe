@@ -171,6 +171,7 @@ proves far more against a third party than against the operator who issued it.
 | `lethe init-db` | Create Lethe's ledger + audit tables in your Postgres |
 | `lethe forget SUBJECT` | Delete a subject everywhere; prints the signed certificate |
 | `lethe verify CERT --public-key PUB` | Verify a certificate against the operator's published key |
+| `lethe ledger-scope` | Show what the ledger holds vs the allowlist; `--purge-disallowed` clears the rest |
 | `lethe reconcile SUBJECT --target STORE:NS:FIELD` | Ask the stores what they hold for a subject, vs what the ledger knows |
 | `lethe reverify SUBJECT` | Re-check absence after `valid_until` (needs `retain_verification_ids`) |
 | `lethe anchor` | Timestamp the audit head with an RFC 3161 authority (run on a schedule) |
