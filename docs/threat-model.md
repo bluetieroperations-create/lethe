@@ -76,10 +76,17 @@ honest and defending against someone else.
 - **Backdating.** `issued_at` is the operator's own clock. Nothing prevents
   issuing a certificate today that claims deletion happened two months ago —
   which matters because Article 17 carries a one-month response deadline, so
-  the timestamp is legally load-bearing.
+  the timestamp is legally load-bearing. **Closed by anchoring:** once a chain
+  head carries an RFC 3161 token, an entry cannot be inserted before it, and a
+  timestamp dated in the past cannot be obtained. See
+  [anchoring.md](anchoring.md).
 - **Tip truncation.** The "record the head out-of-band" defense requires the
   operator to voluntarily publish evidence against themselves. An operator
-  hiding a deletion simply does not.
+  hiding a deletion simply does not. **Anchoring does not close this on its
+  own:** anchor tokens live in the chain, so truncating removes them too, and
+  RFC 3161 authorities keep no record of what they timestamped. It closes only
+  if a token also lives somewhere the operator cannot reach — published, or
+  held by a certificate recipient.
 - **Selective scope.** `declared_scope` is what Lethe was *configured* to
   sweep. An operator can configure fewer connectors than they have stores. The
   certificate is honest about the boundary it drew — it just cannot tell you
@@ -87,12 +94,17 @@ honest and defending against someone else.
 - **Coverage.** `forget()` deletes exactly what the provenance ledger knows
   about. See "Coverage is ledger-shaped" below.
 
-**What would actually fix this:** anchoring the audit head somewhere the
-operator does not control — an RFC 3161 timestamping authority, or periodic
-publication of the head into a transparency log. That converts "we assert" into
-"a third party can corroborate", and it is the single highest-value change
-available to this design. The `timestamp` field exists as the seam for it; it
-is `null` in every certificate issued today, and the `claim` says so.
+**Where this now stands:** `lethe anchor` timestamps the audit head with an
+RFC 3161 authority on a schedule, which converts "we assert" into "a third
+party can corroborate" for everything the chain records. That closes backdating
+outright and closes truncation *provided a token is also held outside* — see
+[anchoring.md](anchoring.md) for the distinction, which matters.
+
+The per-certificate `timestamp` field remains `null`: a token covering a
+finished certificate would have to sit outside the signed payload (it covers
+the signature), so per-document timestamping is a separate change from
+chain anchoring. The `claim` says the field is null rather than leaving a
+reader to assume otherwise.
 
 ## Coverage is ledger-shaped, not store-shaped
 
@@ -137,7 +149,7 @@ ledger; it is a detection tool, not a guarantee.
 | This certificate was issued by the named key | Yes (pinned key + `key_id`) | Yes |
 | The payload has not been altered | Yes | Yes |
 | The audit log has no mid-chain edits | Yes | Yes |
-| The audit log has not been truncated | Only with an externally recorded head | No |
-| Deletion happened at `issued_at` | Yes | **No** — issuer's clock, unanchored |
+| The audit log has not been truncated | Only with an externally recorded head | Only if an anchor token is held outside the operator's reach |
+| Deletion happened at `issued_at` | Yes | Yes **if the chain is anchored**; otherwise no — issuer's clock |
 | Everything Lethe knew about was deleted | Yes | Yes |
 | Nothing about this person remains | **No** — ledger-shaped coverage | **No** |

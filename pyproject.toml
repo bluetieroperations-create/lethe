@@ -24,8 +24,10 @@ Repository = "https://github.com/bluetieroperations-create/lethe"
 Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "jsonschema>=4.21", "mcp>=1.9,<2", "ruff>=0.6", "mypy>=1.11", "asn1crypto>=1.5"]
 mcp = ["mcp>=1.9,<2", "jsonschema>=4.21"]
+# RFC 3161 external anchoring. Optional: Lethe runs without it, unanchored.
+anchor = ["asn1crypto>=1.5"]
 
 [project.scripts]
 lethe = "lethe.cli:cli"

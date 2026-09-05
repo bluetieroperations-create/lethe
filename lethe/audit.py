@@ -1,8 +1,12 @@
 import hashlib
 import hmac
 import json
+from typing import TYPE_CHECKING
 
 import psycopg
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .anchor import Anchor
 
 GENESIS = "0" * 64
 
@@ -47,6 +51,41 @@ class AuditLog:
             )
         self.conn.commit()
         return h
+
+    def anchor_head(self, anchor: "Anchor") -> dict:
+        """Timestamp the current chain head with an external authority and
+        record the evidence as a chain entry.
+
+        Order matters: the head is read and timestamped FIRST, then the anchor
+        entry is appended. So the entry names the head as it stood when the
+        authority saw it, and appending advances the chain past that point. An
+        entry can never afterwards be inserted at the anchored position — that
+        would change every hash from there on and contradict the token.
+
+        The anchoring call happens before any write, so a failing or slow
+        authority raises AnchorError and leaves the chain untouched.
+        """
+        head = self.head()
+        result = anchor.anchor(head.encode())
+        entry_hash = self.append({
+            "event": "anchor",
+            "anchored_head": head,
+            "authority": result.authority,
+            "anchored_at": result.anchored_at,
+            "digest": result.digest,
+            "digest_algorithm": result.digest_algorithm,
+            "policy": result.policy,
+            # The raw RFC 3161 response, base64. This is the evidence: it is
+            # verifiable by any RFC 3161 implementation with the authority's
+            # chain, without Lethe.
+            "token": result.token,
+        })
+        return {
+            "anchored_head": head,
+            "anchored_at": result.anchored_at,
+            "authority": result.authority,
+            "entry_hash": entry_hash,
+        }
 
     def head(self) -> str:
         """Current tip hash (GENESIS if the log is empty). Record this

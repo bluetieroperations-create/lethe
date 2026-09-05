@@ -34,6 +34,17 @@ included here.
   optional connector capability `scan()`, implemented for pgvector.
 - **`reverify()` / `lethe reverify`** — re-checks absence after `valid_until`,
   enabled by the new `Lethe(retain_verification_ids=True)`.
+- **External anchoring** — `lethe anchor` timestamps the audit chain head with
+  an RFC 3161 authority, and records the raw token as a chain entry. Anchoring
+  the head rather than each certificate covers every recorded event, keeps the
+  authority out of the deletion path (a TSA outage never blocks a data-subject
+  request), and costs one call per interval. Closes backdating: an entry cannot
+  be inserted before an anchored head, and a timestamp dated in the past cannot
+  be obtained. Optional dependency: `pip install 'lethe-delete[anchor]'`.
+  See `docs/anchoring.md`.
+- **`docs/anchoring.md`** — choosing an authority (including eIDAS qualified
+  timestamps), what anchoring does and does not prove, and how to verify a
+  stored token with `openssl ts`.
 - **`docs/threat-model.md`** — who must be trusted for a certificate to mean
   anything, and what holds against a third party versus a dishonest operator.
 - **`docs/key-rotation.md`** — rotation, verifying older certificates, and the

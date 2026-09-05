@@ -175,6 +175,41 @@ def audit_head(database_url: str) -> None:
         click.echo(AuditLog(conn).head())
 
 
+@cli.command("anchor")
+@click.option("--database-url", envvar="DATABASE_URL", required=True)
+@click.option(
+    "--tsa",
+    envvar="LETHE_TSA_URL",
+    default="https://freetsa.org/tsr",
+    show_default=True,
+    help="RFC 3161 timestamping authority. The default is community-run with "
+    "no SLA — point this at an authority you are willing to rely on, and at a "
+    "qualified (eIDAS) TSA if you need the legal presumption of Article 41.",
+)
+@click.option("--hash-algorithm", default="sha256", show_default=True)
+@click.option("--timeout", default=20.0, show_default=True, type=float)
+def anchor(database_url: str, tsa: str, hash_algorithm: str, timeout: float) -> None:
+    """Timestamp the current audit head with an external authority.
+
+    Run this on a schedule. Each anchor pins the chain up to that point: an
+    entry cannot later be inserted before an anchored head without
+    contradicting the token, which is what makes backdating a recorded forget
+    structurally impossible rather than merely detectable.
+
+    Anchoring is deliberately NOT part of forget(): a slow or unreachable
+    authority must never block a data-subject request.
+    """
+    from .anchor import AnchorError, Rfc3161Anchor
+
+    try:
+        provider = Rfc3161Anchor(tsa, hash_algorithm=hash_algorithm, timeout=timeout)
+        with psycopg.connect(database_url) as conn:
+            result = AuditLog(conn).anchor_head(provider)
+    except AnchorError as e:
+        raise SystemExit(f"lethe: anchoring failed: {e}") from None
+    click.echo(json.dumps(result, indent=2))
+
+
 @cli.command("verify-audit")
 @click.option("--database-url", envvar="DATABASE_URL", required=True)
 @click.option(

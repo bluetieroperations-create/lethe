@@ -173,6 +173,7 @@ proves far more against a third party than against the operator who issued it.
 | `lethe verify CERT --public-key PUB` | Verify a certificate against the operator's published key |
 | `lethe reconcile SUBJECT --target STORE:NS:FIELD` | Ask the stores what they hold for a subject, vs what the ledger knows |
 | `lethe reverify SUBJECT` | Re-check absence after `valid_until` (needs `retain_verification_ids`) |
+| `lethe anchor` | Timestamp the audit head with an RFC 3161 authority (run on a schedule) |
 | `lethe audit-head` | Print the audit-log tip hash (record it out-of-band) |
 | `lethe verify-audit --expected-head H` | Detect tampering/truncation of the audit log |
 
@@ -212,9 +213,11 @@ operator's published public key to pin against). Full guide:
 - **Pre-existing data** (written before you adopted Lethe) is found by
   `lethe reconcile` where the store exposes a queryable subject field, and can
   be tagged for deletion with `--tag-untracked`.
-- **Self-attestation.** The operator signs their own certificate, and
-  `issued_at` is their own clock — there is no external timestamping authority
-  yet. See [docs/threat-model.md](docs/threat-model.md).
+- **Self-attestation, unless you anchor.** The operator signs their own
+  certificate and `issued_at` is their own clock. `lethe anchor` timestamps the
+  audit head with an external RFC 3161 authority, which closes backdating; see
+  [docs/anchoring.md](docs/anchoring.md) for what it does and does not prove,
+  and [docs/threat-model.md](docs/threat-model.md) for the wider picture.
 - **Not erasure from backups or model weights.** Out of scope by design; the
   certificate says so.
 
