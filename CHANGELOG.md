@@ -9,6 +9,57 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.7.0] — 2026-09-06
+
+### Fixed
+
+- **Concurrent audit appends no longer fork the chain.** `AuditLog.append`
+  reads the chain tip, hashes it, and inserts. Two writers that read the same
+  tip both committed, leaving two entries claiming one predecessor — and
+  `verify_chain()` then reported the operator's own log as tampered with, at
+  exactly the moment they were trying to prove it had not been.
+
+  This was not hypothetical and not MCP-specific. Every CLI command opens its
+  own connection, and `docs/anchoring.md` tells operators to run `lethe anchor`
+  hourly on a timer, so a scheduled anchor overlapping a `lethe forget` is the
+  documented deployment. Measured before the fix: 8 concurrent appends across
+  separate connections produced 8 entries with 5 distinct `prev_hash` values
+  and `verify_chain()` returning `False`.
+
+  `prev_hash` now carries a `UNIQUE` index. In a linear chain every entry links
+  to a distinct predecessor, so uniqueness *is* the chain invariant; stating it
+  as a database constraint makes a fork impossible rather than unlikely. The
+  losing writer is rejected, re-reads the tip, and links onto the winner's
+  entry. This is the only guard that works across processes — an in-process
+  lock cannot help two CLI invocations.
+
+  Retries back off with full jitter. Without it, writers that collide once
+  collide again in lockstep: measured at 24 concurrent writers, 5 exhausted
+  their attempts and their entries were never recorded. The chain stayed
+  intact, but an unrecorded forget is its own kind of hole. With backoff, 40
+  concurrent writers across separate connections all record, chain intact,
+  stable across repeated runs.
+
+  **Known limitation, now documented:** this makes concurrent *connections*
+  safe, not one connection shared by concurrent threads — there the transaction
+  is shared, so a rollback in one thread aborts another's work. The MCP server
+  holds a single connection and serializes tool bodies for exactly this reason.
+
+- **`init_schema` upgrades an existing table in place**, adding the index to
+  chains written by earlier versions. If such a chain already contains a fork
+  the index cannot be built, and rather than a raw Postgres error this raises
+  `AuditChainForked` naming the duplicated hashes and the rows that share them.
+  The rows are left untouched — they are evidence, not something to clean up
+  silently. `AuditLog.forks()` reports the same thing on demand.
+
+### Not changed, deliberately
+
+- **MCP tool calls stay serialized.** Now that the chain is safe at the
+  database, the remaining reason for the lock is the single shared psycopg
+  connection. Adding a connection pool would buy throughput that a
+  DSAR-deletion workload does not need, in the subsystem where correctness is
+  the product. `lethe/mcp.py` records the reasoning.
+
 ## [0.6.0] — 2026-09-06
 
 ### Changed

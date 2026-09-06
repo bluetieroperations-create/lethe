@@ -344,15 +344,17 @@ def create_server(ctx: ServerContext):
     # event-loop thread, so they serialized on their own. mcp 2.x dispatches
     # them through anyio.to_thread.run_sync instead, so concurrent calls run
     # on separate worker threads — the exact hazard this comment used to warn
-    # about ("an SDK that moves sync tools to a threadpool"). Two things break
-    # without serialization:
+    # about ("an SDK that moves sync tools to a threadpool").
     #
-    #   * the audit hash-chain. append() reads the tip, hashes it, and
-    #     inserts; two threads read the same tip and the chain forks, which
-    #     verify_chain() then reports as tampering. Demonstrated in
-    #     test_mcp_concurrency.py.
-    #   * the single shared psycopg connection, and with it the transaction
-    #     boundary — one tool's commit lands another tool's half-finished work.
+    # The audit chain is no longer at risk here: a unique index on prev_hash
+    # makes a fork impossible at the database, across processes, which is
+    # where the real exposure was (a cron `lethe anchor` racing an operator's
+    # `lethe forget` — see lethe/audit.py). What is left is the single shared
+    # psycopg connection: concurrent tools on one connection share a
+    # transaction boundary, so one tool's commit lands another's half-finished
+    # work, and a statement rolled back in one thread aborts the transaction
+    # the other is still using. That is not fixable at the database, and it is
+    # what this lock is for.
     #
     # So the lock is not a throughput trade-off: it restores the exact
     # execution model the handlers were written and tested against. Tools are

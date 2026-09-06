@@ -5,19 +5,18 @@ and lethe/mcp.py only documented it as an invariant. mcp 2.x dispatches sync
 tools through anyio.to_thread.run_sync, so concurrent calls land on separate
 worker threads and the invariant has to be enforced rather than assumed.
 
-These tests exist because the failure is silent: nothing raises, the tools
-return successful-looking results, and the damage shows up later as an audit
-chain that reports itself as tampered with.
+The audit chain is no longer what the lock protects — a unique index on
+prev_hash makes a fork impossible at the database, across processes, which no
+in-process lock could do (see test_audit.py). What remains, and what the lock
+is still load-bearing for, is the single shared psycopg connection: concurrent
+tools on one connection share a transaction boundary, so one tool's commit
+lands another's half-finished work, and a rolled-back statement in one thread
+aborts the transaction the other is using.
 """
 
 import asyncio
-import os
 import threading
 
-import psycopg
-import pytest
-
-from lethe.audit import AuditLog
 from lethe.mcp import ServerContext, create_server
 
 
@@ -89,34 +88,3 @@ def test_the_sdk_would_run_them_concurrently_without_the_lock():
         "the SDK now serializes sync tools itself; re-check whether "
         "lethe/mcp.py's lock is still the thing providing the guarantee"
     )
-
-
-@pytest.mark.skipif(
-    not os.environ.get("LETHE_TEST_DATABASE_URL"), reason="needs LETHE_TEST_DATABASE_URL"
-)
-def test_concurrent_appends_fork_the_audit_chain_without_serialization():
-    """What the lock is actually protecting: append() reads the tip, hashes
-    it, and inserts. Two threads read the same tip, and the chain forks —
-    verify_chain() then reports the operator's own log as tampered with."""
-    with psycopg.connect(os.environ["LETHE_TEST_DATABASE_URL"]) as conn:
-        with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS lethe_audit")
-        conn.commit()
-        audit = AuditLog(conn)
-        audit.init_schema()
-
-        threads = [
-            threading.Thread(target=audit.append, args=({"event": "forget", "n": i},))
-            for i in range(8)
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert audit.verify_chain() is False
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*), count(DISTINCT prev_hash) FROM lethe_audit")
-            entries, distinct_prev = cur.fetchone()
-        # An intact chain links each entry to a distinct predecessor.
-        assert distinct_prev < entries
