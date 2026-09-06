@@ -11,13 +11,6 @@ updates:
       python-dependencies:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    ignore:
-      # mcp 2.x renamed FastMCP to MCPServer and lethe/mcp.py is still v1 code,
-      # so the <2 bound in pyproject is deliberate, not stale. Without this,
-      # the same major-bump PR is reopened every week and has to be re-closed
-      # (see #5). Remove this entry as part of the 2.x migration, not before.
-      - dependency-name: mcp
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /

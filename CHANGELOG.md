@@ -9,6 +9,51 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.6.0] — 2026-09-06
+
+### Changed
+
+- **Migrated the MCP server to the `mcp` 2.x SDK** (`lethe-delete[mcp]` now
+  requires `mcp>=2,<3`). `FastMCP` became `MCPServer`, `ToolAnnotations` fields
+  are read back as snake_case, and `call_tool` returns a `CallToolResult`
+  rather than bare content blocks.
+
+  **The rename was the small part.** mcp 1.x called sync tool functions inline
+  on the event-loop thread, so tool calls serialized on their own; 2.x
+  dispatches them through `anyio.to_thread.run_sync`, so they run concurrently
+  on worker threads. `lethe/mcp.py` had carried a comment since v0.1 saying
+  exactly this would break it — "an SDK that moves sync tools to a threadpool
+  makes both hazards live" — and it was right:
+
+  - `AuditLog.append` reads the chain tip, hashes it, and inserts. Concurrent
+    appends read the same tip and the chain **forks**. Measured against a real
+    database before the fix: 8 appends produced 4 distinct `prev_hash` values
+    and `verify_chain()` returned `False`. A forked chain reports the
+    operator's own audit log as tampered with — the property every certificate
+    leans on.
+  - The server holds one psycopg connection, so overlapping tools share a
+    transaction boundary and one tool's `commit()` lands another's
+    half-finished work.
+
+  Tool bodies are now serialized under a single lock, restoring the exact
+  execution model the handlers were written and tested against — this is a
+  correctness fix, not a throughput trade-off. Tools are registered through a
+  helper so a new one cannot silently opt out, and
+  `tests/test_mcp_concurrency.py` pins all of it: that bodies do not overlap,
+  that the SDK *would* overlap them without the lock (so the first test cannot
+  quietly stop proving anything), and that concurrent appends fork the chain.
+
+  Verified end to end over the real stdio transport against a live database:
+  12 concurrent tags followed by 12 overlapping preview/forget cycles gave
+  12/12 successful forgets, all certificates `all_verified`, and an audit chain
+  of 24 entries with 24 distinct `prev_hash` — intact.
+
+  `docs/m2m.md` now documents the serialization, since it is behaviour an
+  agent driver can observe.
+
+- **Dependabot no longer ignores the `mcp` major bump.** The ignore entry
+  added in 0.5.0 said to remove it as part of this migration; done.
+
 ## [0.5.0] — 2026-09-06
 
 ### Added

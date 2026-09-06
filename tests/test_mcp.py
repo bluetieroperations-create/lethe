@@ -269,10 +269,37 @@ def test_create_server_registers_six_tools_with_honest_annotations():
         "lethe_forget", "lethe_forget_preview", "lethe_status",
         "lethe_tag", "lethe_verify_certificate", "lethe_verify_subject",
     ]
-    assert by_name["lethe_forget"].annotations.destructiveHint is True
+    assert by_name["lethe_forget"].annotations.destructive_hint is True
     for name, tool in by_name.items():
         if name != "lethe_forget":
-            assert tool.annotations.destructiveHint is False
+            assert tool.annotations.destructive_hint is False
+    # The one destructive tool is also the only non-read-only writer besides
+    # lethe_tag; an agent picks its caution from these, so pin them.
+    assert by_name["lethe_status"].annotations.read_only_hint is True
+    assert by_name["lethe_tag"].annotations.read_only_hint is False
+
+
+def test_serialization_wrapper_does_not_flatten_the_tool_schemas():
+    """Tools are registered through a wrapper that takes the lock. If that
+    wrapper ever loses functools.wraps, inspect.signature stops following
+    __wrapped__ and every tool's schema collapses to (*args, **kwargs) — an
+    agent would then be told lethe_forget takes no arguments, and nothing else
+    in the suite would notice."""
+    server = create_server(ServerContext(lethe=None, guard=None, trusted_public_key=None))
+    by_name = {t.name: t for t in asyncio.run(server.list_tools())}
+
+    schema = by_name["lethe_forget"].input_schema
+    assert sorted(schema["properties"]) == ["confirm_token", "subject_id"]
+    assert sorted(schema["required"]) == ["confirm_token", "subject_id"]
+
+    # The one optional argument must stay optional.
+    verify = by_name["lethe_verify_certificate"].input_schema
+    assert sorted(verify["properties"]) == ["certificate", "public_key"]
+    assert verify["required"] == ["certificate"]
+
+    # Descriptions come from the docstrings, which the wrapper also carries.
+    for name, tool in by_name.items():
+        assert tool.description, f"{name} lost its description"
 
 
 def test_build_context_no_env_is_verify_only():
