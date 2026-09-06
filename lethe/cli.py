@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 
@@ -262,7 +263,19 @@ def audit_head(database_url: str) -> None:
 )
 @click.option("--hash-algorithm", default="sha256", show_default=True)
 @click.option("--timeout", default=20.0, show_default=True, type=float)
-def anchor(database_url: str, tsa: str, hash_algorithm: str, timeout: float) -> None:
+@click.option(
+    "--emit",
+    "emit_path",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write the anchor record to a file for PUBLISHING. Anchoring closes "
+    "backdating on its own, but closes tail truncation only if a token also "
+    "lives somewhere you cannot reach — publish this alongside your public key.",
+)
+def anchor(
+    database_url: str, tsa: str, hash_algorithm: str, timeout: float,
+    emit_path: str | None,
+) -> None:
     """Timestamp the current audit head with an external authority.
 
     Run this on a schedule. Each anchor pins the chain up to that point: an
@@ -281,6 +294,48 @@ def anchor(database_url: str, tsa: str, hash_algorithm: str, timeout: float) -> 
             result = AuditLog(conn).anchor_head(provider)
     except AnchorError as e:
         raise SystemExit(f"lethe: anchoring failed: {e}") from None
+
+    if emit_path:
+        # The token is the evidence, and it is only useful against truncation
+        # if a copy exists outside the operator's reach. Emitting the raw
+        # response verbatim means a third party can check it with any RFC 3161
+        # implementation, without Lethe.
+        with psycopg.connect(database_url) as conn:
+            entry = AuditLog(conn).entry_by_hash(result["entry_hash"])
+        record = {
+            "anchored_head": result["anchored_head"],
+            "anchored_at": result["anchored_at"],
+            "authority": result["authority"],
+            "digest": entry["digest"],
+            "digest_algorithm": entry["digest_algorithm"],
+            "policy": entry["policy"],
+            "token": entry["token"],
+            "verify": (
+                "base64 -d <token> > anchor.tsr; "
+                "printf %s <anchored_head> > head.txt; "
+                "openssl ts -verify -in anchor.tsr -data head.txt "
+                "-CAfile <authority chain> -untrusted <authority cert>"
+            ),
+        }
+        # Write-then-rename. This file is the copy of the evidence that lives
+        # outside the operator's reach, so a crash mid-write must not destroy
+        # the record already published there — and a reader served the path
+        # directly must never see half a document.
+        tmp_path = emit_path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(record, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, emit_path)
+        except BaseException:
+            # Leaving a stale partial next to a published record invites
+            # someone to publish the wrong one.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        result["emitted_to"] = emit_path
+
     click.echo(json.dumps(result, indent=2))
 
 

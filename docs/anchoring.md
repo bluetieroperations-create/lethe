@@ -47,8 +47,11 @@ destroyed.
 Anchoring therefore only closes truncation if a token also lives somewhere the
 operator cannot reach. Two cheap ways, both worth doing:
 
-- **Publish anchor tokens** (or just the anchored head plus its `anchored_at`)
-  wherever you publish your trusted public key.
+- **Publish anchor tokens.** `lethe anchor --emit anchor-public.json` writes a
+  self-contained record — the head that was attested, the raw token, and the
+  `openssl` command to check them — which you publish wherever you publish your
+  trusted public key. A copy you do not control is the whole point: a token
+  that only exists in the chain disappears with the chain.
 - **Let recipients be witnesses.** Every certificate names the `audit_head` its
   run started from, so anyone holding a certificate holds evidence of chain
   state at that time. Multiple recipients means multiple independent witnesses,
@@ -64,6 +67,18 @@ operator cannot reach. Two cheap ways, both worth doing:
 | **OpenTimestamps / Bitcoin** | Free, no trusted third party, proofs verifiable forever. Confirmation takes hours, so it cannot be a synchronous anchor — it would need a deferred second anchor. Not currently implemented. |
 
 Lethe talks to any RFC 3161 authority; `--tsa` is the only thing that changes.
+
+### If your authority needs a credential
+
+Paid TSAs commonly authenticate the endpoint itself. Lethe records the
+authority in the audit chain and in the `--emit` file, so before either is
+published it strips HTTP userinfo (`https://user:pass@…`) and the query string
+(`?apikey=…`) — the request still goes to the full URL you configured.
+
+It cannot strip a credential embedded in the **path**
+(`https://tsa.example/api/<secret>/tsr`), because a path is how an authority is
+identified. If your TSA works that way, treat the emitted record as sensitive,
+or ask the authority for a header- or query-based credential instead.
 
 ### A compatibility note
 

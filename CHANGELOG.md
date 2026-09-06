@@ -9,6 +9,60 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.5.0] — 2026-09-06
+
+### Added
+
+- **Verification against a registry of historical keys.**
+  `verify_certificate_json(cert, trusted_keys={key_id: public_key})` — and the
+  same on `verify_certificate`. cert v3 made certificates self-describing about
+  which key epoch signed them, but both verifiers took a single key, so
+  `docs/key-rotation.md` had to tell readers to hand-maintain the mapping and
+  do the lookup themselves. The certificate knows; the verifier now reads it.
+
+  A certificate naming an epoch that is not in the registry fails with the new
+  `UNKNOWN_KEY_ID`, kept distinct from `KEY_MISMATCH` because the certificate
+  is fine and the verifier simply has not been given that key. Certificates
+  predating `lethe.cert/3` carry no `key_id` and report the same, saying so.
+  Passing the current key alone to an old certificate still fails: the registry
+  makes rotation usable, it does not loosen the pin.
+
+- **`lethe anchor --emit FILE`** — writes a self-contained anchor record (the
+  attested head, the raw RFC 3161 token, and the `openssl` command to check
+  them) for publishing alongside your public key. `docs/anchoring.md` says
+  anchoring closes backdating on its own but closes tail truncation only if a
+  token also lives somewhere the operator cannot reach; there was previously no
+  way to get one out. A token that exists only inside the chain disappears with
+  the chain.
+
+- **Dependabot no longer re-proposes the `mcp` major bump.** The `<2` bound is
+  deliberate — 2.x renamed `FastMCP` to `MCPServer` and `lethe/mcp.py` is still
+  v1 code — so the same PR was reopening weekly (#5). Remove the ignore entry
+  as part of the 2.x migration, not before.
+
+### Fixed
+
+- **The recorded timestamping authority no longer carries a credential.**
+  `lethe/anchor.py` already scrubbed the TSA URL out of error messages because
+  "a TSA endpoint may embed a customer identifier" — then wrote that same URL
+  verbatim into the audit chain and into the `--emit` file, whose entire
+  purpose is publication. A paid TSA authenticated as
+  `https://acct:secret@tsa.example/tsr?apikey=…` would have published the
+  operator's account credential to every recipient of the anchor record.
+
+  HTTP userinfo and the query string are now stripped before the authority is
+  recorded; scheme, host, port and path are kept, since that is what identifies
+  the authority to a verifier, and the token carries the TSA's certificate
+  anyway. The request still goes to the full URL. A credential embedded in the
+  *path* cannot be stripped — `docs/anchoring.md` now says so.
+
+- **`--emit` writes atomically.** It truncated the target in place, so a
+  failure mid-write destroyed the previously published record — the copy of the
+  evidence that is supposed to survive the operator — and could serve half a
+  document to a reader fetching the path. Now written to a temporary file in
+  the same directory and renamed over the target, with the temporary removed on
+  failure.
+
 ## [0.4.0] — 2026-09-05
 
 ### Added
@@ -214,6 +268,7 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
+[0.5.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.5.0
 [0.4.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.4.0
 [0.3.1]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0

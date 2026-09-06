@@ -78,7 +78,7 @@ class AnchorError(Exception):
 class AnchorResult:
     """A third party's attestation that `digest` existed at `anchored_at`."""
 
-    authority: str        # TSA endpoint that issued the token
+    authority: str        # TSA endpoint that issued the token, credentials stripped
     token: str            # base64 of the raw RFC 3161 response — the evidence
     anchored_at: str      # the TSA's genTime, ISO-8601
     digest: str           # hex digest that was timestamped
@@ -114,6 +114,25 @@ class _SchemeCheckingRedirectHandler(urllib.request.HTTPRedirectHandler):
                 f"URL; only http and https are followed"
             )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def public_authority_url(url: str) -> str:
+    """The part of a TSA endpoint that is safe to publish.
+
+    The URL is a request detail, but `authority` is evidence metadata: it is
+    written into the audit chain and into the file `anchor --emit` produces for
+    publication. A TSA endpoint can carry a credential — HTTP userinfo, or an
+    API key in the query string — so publishing it verbatim would leak it to
+    everyone the anchor is shown to. Scheme, host and path are what identify
+    the authority to a verifier; the token itself carries the TSA's certificate
+    anyway, so nothing verifiable is lost by dropping the rest.
+    """
+    parts = urllib.parse.urlsplit(url)
+    # Everything after the last "@" is host[:port] — taken verbatim rather than
+    # reassembled from .hostname/.port, which drops the brackets an IPv6
+    # authority needs and would publish an unparseable URL.
+    host = parts.netloc.rpartition("@")[2]
+    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
 def _http_post(url: str, body: bytes, timeout: float) -> bytes:
@@ -175,6 +194,8 @@ class Rfc3161Anchor:
                 f"timestamping authority URL must be http or https, got {scheme or 'none'!r}"
             )
         self.url = url
+        # The request goes to `url`; only this form is ever recorded.
+        self.public_url = public_authority_url(url)
         self.hash_algorithm = hash_algorithm
         self.timeout = timeout
         self._transport = transport or (
@@ -240,7 +261,7 @@ class Rfc3161Anchor:
             raise AnchorError("timestamp imprint mismatch — token covers different data")
 
         return AnchorResult(
-            authority=self.url,
+            authority=self.public_url,
             token=base64.b64encode(raw).decode(),
             anchored_at=anchored_at,
             digest=digest.hex(),

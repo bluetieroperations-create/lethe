@@ -87,6 +87,19 @@ class AuditLog:
             "entry_hash": entry_hash,
         }
 
+    def entry_by_hash(self, entry_hash: str) -> dict:
+        """The entry with this hash. Used to retrieve an anchor's token for
+        publishing; the chain stores the evidence, so emitting reads it back
+        rather than holding it in memory across the call."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT entry FROM lethe_audit WHERE entry_hash = %s", (entry_hash,)
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise KeyError(f"no audit entry with hash {entry_hash!r}")
+        return dict(row[0])
+
     def head(self) -> str:
         """Current tip hash (GENESIS if the log is empty). Record this
         out-of-band; later pass it to verify_chain(expected_head=...) to detect
