@@ -40,6 +40,29 @@ that issued it.
   v1 code — so the same PR was reopening weekly (#5). Remove the ignore entry
   as part of the 2.x migration, not before.
 
+### Fixed
+
+- **The recorded timestamping authority no longer carries a credential.**
+  `lethe/anchor.py` already scrubbed the TSA URL out of error messages because
+  "a TSA endpoint may embed a customer identifier" — then wrote that same URL
+  verbatim into the audit chain and into the `--emit` file, whose entire
+  purpose is publication. A paid TSA authenticated as
+  `https://acct:secret@tsa.example/tsr?apikey=…` would have published the
+  operator's account credential to every recipient of the anchor record.
+
+  HTTP userinfo and the query string are now stripped before the authority is
+  recorded; scheme, host, port and path are kept, since that is what identifies
+  the authority to a verifier, and the token carries the TSA's certificate
+  anyway. The request still goes to the full URL. A credential embedded in the
+  *path* cannot be stripped — `docs/anchoring.md` now says so.
+
+- **`--emit` writes atomically.** It truncated the target in place, so a
+  failure mid-write destroyed the previously published record — the copy of the
+  evidence that is supposed to survive the operator — and could serve half a
+  document to a reader fetching the path. Now written to a temporary file in
+  the same directory and renamed over the target, with the temporary removed on
+  failure.
+
 ## [0.4.0] — 2026-09-05
 
 ### Added

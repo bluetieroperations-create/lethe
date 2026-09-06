@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 
@@ -316,8 +317,23 @@ def anchor(
                 "-CAfile <authority chain> -untrusted <authority cert>"
             ),
         }
-        with open(emit_path, "w") as f:
-            json.dump(record, f, indent=2)
+        # Write-then-rename. This file is the copy of the evidence that lives
+        # outside the operator's reach, so a crash mid-write must not destroy
+        # the record already published there — and a reader served the path
+        # directly must never see half a document.
+        tmp_path = emit_path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(record, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, emit_path)
+        except BaseException:
+            # Leaving a stale partial next to a published record invites
+            # someone to publish the wrong one.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
         result["emitted_to"] = emit_path
 
     click.echo(json.dumps(result, indent=2))

@@ -6,6 +6,8 @@ readers to hand-maintain a {key_id: key} dict and do the lookup themselves.
 The certificate knows; the verifier should read it.
 """
 
+import base64
+
 import pytest
 
 from lethe.cert_schema import verify_certificate_json
@@ -117,3 +119,71 @@ def test_the_crypto_path_takes_a_registry_too():
     assert verify_certificate(cert, trusted_keys=_registry(current)) is False
     with pytest.raises(ValueError, match="exactly one"):
         verify_certificate(cert)
+
+
+def _resigned_claiming(signer, claimed_key_id):
+    """A fully self-consistent certificate whose signed payload names a key
+    epoch other than the one that signed it. Nothing about it is malformed:
+    the hash matches the payload, the signature matches the hash. Only
+    recomputing key_id from the key actually present can refuse it."""
+    import hashlib
+
+    from lethe.certificate import canonical_payload_bytes
+
+    payload = {**_cert(signer).payload, "key_id": claimed_key_id}
+    data = canonical_payload_bytes(payload)
+    return {
+        "payload": payload,
+        "payload_hash": hashlib.sha256(data).hexdigest(),
+        "signature": signer.sign(data),
+        "public_key": signer.public_key_b64(),
+    }
+
+
+def test_a_misfiled_registry_entry_cannot_launder_a_wrong_key():
+    """The registry lets the *certificate* choose which key it is checked
+    against, so a mis-mapped entry is the registry's own failure mode: map
+    epoch A's id to B's key, and a certificate claiming A but signed by B is
+    consistent at every other step — same key pinned, hash intact, signature
+    valid. Delete the key_id recomputation and this case verifies."""
+    a, b = Signer.generate(), Signer.generate()
+    a_id = key_id_for(a.public_key_b64())
+    cert = _resigned_claiming(b, a_id)
+    misfiled = {a_id: b.public_key_b64()}
+
+    result = verify_certificate_json(cert, trusted_keys=misfiled)
+    assert result["valid"] is False
+    assert result["reasons"] == ["KEY_ID_MISMATCH"]
+
+
+def test_a_misfiled_registry_entry_is_caught_on_the_crypto_path_too():
+    from lethe.models import Certificate
+
+    a, b = Signer.generate(), Signer.generate()
+    a_id = key_id_for(a.public_key_b64())
+    cert = Certificate(**_resigned_claiming(b, a_id))
+    assert verify_certificate(cert, trusted_keys={a_id: b.public_key_b64()}) is False
+    # ...and the same certificate is refused when pinned directly, so the
+    # registry is not the only thing standing between it and acceptance.
+    assert verify_certificate(cert, b.public_key_b64()) is False
+
+
+def test_a_forged_signature_is_still_caught_through_the_registry():
+    """Distinct from the tampered-payload case: here the payload and its hash
+    agree, so only the Ed25519 check can refuse it."""
+    signer = Signer.generate()
+    cert = certificate_to_dict(_cert(signer))
+    sig = bytearray(base64.b64decode(cert["signature"]))
+    sig[0] ^= 0xFF
+    cert["signature"] = base64.b64encode(bytes(sig)).decode()
+    assert verify_certificate_json(cert, trusted_keys=_registry(signer))["reasons"] == [
+        "BAD_SIGNATURE"
+    ]
+
+
+def test_an_empty_registry_is_a_registry_not_an_unpinned_check():
+    """`{}` is falsy but not None. It must select the registry path and fail
+    closed there — never fall through to 'no key supplied, accept'."""
+    cert = certificate_to_dict(_cert(Signer.generate()))
+    assert verify_certificate_json(cert, trusted_keys={})["reasons"] == ["UNKNOWN_KEY_ID"]
+    assert verify_certificate(_cert(Signer.generate()), trusted_keys={}) is False

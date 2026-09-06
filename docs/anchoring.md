@@ -68,6 +68,18 @@ operator cannot reach. Two cheap ways, both worth doing:
 
 Lethe talks to any RFC 3161 authority; `--tsa` is the only thing that changes.
 
+### If your authority needs a credential
+
+Paid TSAs commonly authenticate the endpoint itself. Lethe records the
+authority in the audit chain and in the `--emit` file, so before either is
+published it strips HTTP userinfo (`https://user:pass@…`) and the query string
+(`?apikey=…`) — the request still goes to the full URL you configured.
+
+It cannot strip a credential embedded in the **path**
+(`https://tsa.example/api/<secret>/tsr`), because a path is how an authority is
+identified. If your TSA works that way, treat the emitted record as sensitive,
+or ask the authority for a header- or query-based credential instead.
+
 ### A compatibility note
 
 Some strict RFC 3161 parsers reject real responses from major CAs over DER SET

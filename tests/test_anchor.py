@@ -311,6 +311,8 @@ def test_anchor_emit_writes_a_self_contained_record(conn, tmp_path, monkeypatch)
     result = CliRunner().invoke(
         cli,
         ["anchor", "--database-url", os.environ["LETHE_TEST_DATABASE_URL"],
+         # Credential-bearing on purpose: this file gets published.
+         "--tsa", "https://acct-12345:s3cr3t@tsa.example/tsr?apikey=DEADBEEF",
          "--emit", str(out)],
     )
     assert result.exit_code == 0, result.output
@@ -323,3 +325,100 @@ def test_anchor_emit_writes_a_self_contained_record(conn, tmp_path, monkeypatch)
     assert base64.b64decode(record["token"]).startswith(b"\x30")
     # And a pointer to how, so the file is useful without the docs to hand.
     assert "openssl ts -verify" in record["verify"]
+    # The file is for publication, so nothing in it may carry the credential
+    # the operator authenticates to the TSA with.
+    assert record["authority"] == "https://tsa.example/tsr"
+    for secret in ("acct-12345", "s3cr3t", "DEADBEEF"):
+        assert secret not in out.read_text()
+    # Pin the exact field set. This file is published, so a field added to the
+    # record later has to be justified against that rather than inherited.
+    assert set(record) == {
+        "anchored_head", "anchored_at", "authority", "digest",
+        "digest_algorithm", "policy", "token", "verify",
+    }
+    # The one thing a third party actually does with the file: reproduce the
+    # digest from the head, exactly as the `verify` recipe says to.
+    assert record["digest"] == hashlib.sha256(
+        record["anchored_head"].encode()
+    ).hexdigest()
+
+
+def test_authority_recorded_for_publication_carries_no_credential():
+    """`authority` is evidence metadata: it lands in the audit chain and in the
+    file `anchor --emit` is meant to publish. A TSA endpoint can carry a
+    credential (HTTP userinfo, an API key in the query), so recording the URL
+    verbatim would hand it to everyone the anchor is shown to."""
+    url = "https://acct-12345:s3cr3t@tsa.example/tsr?apikey=DEADBEEF"
+    result = Rfc3161Anchor(url, transport=_fake_tsa()).anchor(b"head")
+
+    assert result.authority == "https://tsa.example/tsr"
+    for secret in ("acct-12345", "s3cr3t", "DEADBEEF", "apikey"):
+        assert secret not in result.authority
+
+
+def test_scrubbing_the_authority_does_not_change_where_the_request_goes():
+    """Only the recorded form is scrubbed. Stripping the credential from the
+    request itself would break every TSA that authenticates that way."""
+    posted = {}
+
+    def transport(url, body):
+        posted["url"] = url
+        return _fake_tsa()(url, body)
+
+    url = "https://acct:pw@tsa.example/tsr?apikey=DEADBEEF"
+    Rfc3161Anchor(url, transport=transport).anchor(b"head")
+
+    assert posted["url"] == url
+
+
+def test_public_authority_url_keeps_what_identifies_the_authority():
+    """Host, port and path stay: a verifier uses them to know whose token this
+    is. Nothing else in a URL identifies an authority."""
+    from lethe.anchor import public_authority_url
+
+    assert public_authority_url("https://freetsa.org/tsr") == "https://freetsa.org/tsr"
+    assert (
+        public_authority_url("http://tsa.example:8080/a/b#frag")
+        == "http://tsa.example:8080/a/b"
+    )
+
+
+def test_a_failed_emit_does_not_destroy_the_published_record(conn, tmp_path, monkeypatch):
+    """The emitted file is, by this feature's own argument, the copy of the
+    evidence that lives outside the operator's reach. A re-emit that dies
+    mid-write must leave the previous record intact rather than truncate it to
+    nothing — and must never leave a half-written document at the path a reader
+    is being served."""
+    import json
+
+    from click.testing import CliRunner
+
+    from lethe.audit import AuditLog
+    from lethe.cli import cli
+
+    AuditLog(conn).init_schema()
+
+    import lethe.anchor as anchor_module
+
+    real = anchor_module.Rfc3161Anchor
+    monkeypatch.setattr(
+        anchor_module, "Rfc3161Anchor",
+        lambda url, **kw: real(url, transport=_fake_tsa(),
+                               **{k: v for k, v in kw.items() if k != "transport"}),
+    )
+
+    out = tmp_path / "anchor-public.json"
+    args = ["anchor", "--database-url", os.environ["LETHE_TEST_DATABASE_URL"],
+            "--emit", str(out)]
+    assert CliRunner().invoke(cli, args).exit_code == 0
+    published = out.read_text()
+
+    def _explode(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(json, "dump", _explode)
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code != 0
+
+    assert out.read_text() == published
+    assert list(tmp_path.iterdir()) == [out]
