@@ -81,3 +81,8 @@ warn_unused_ignores = true
 # Run them with:  pytest -m live
 markers = ["live: hits a real third-party service; needs credentials"]
 addopts = "-m 'not live'"
+# Only this package's tests. notary/ is a separate distribution with its own
+# dependencies (starlette, x402) and its own pytest run; without this, a bare
+# `pytest` at the repo root — which is what CI runs — would collect its tests
+# and fail on imports that lethe deliberately does not have.
+testpaths = ["tests"]
