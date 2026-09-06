@@ -40,6 +40,13 @@ class WitnessLog:
         self.path = path
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL survives a crash mid-write without losing committed rows, and
+        # FULL synchronous means a receipt the customer has been handed is on
+        # disk before the response goes out. This is an evidence store: losing
+        # the last few rows to a power cut is exactly the failure it exists to
+        # rule out, and the write rate is far too low for the cost to matter.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         with closing(self._conn.cursor()) as cur:
             cur.executescript(SCHEMA)
         self._conn.commit()
@@ -116,6 +123,18 @@ class WitnessLog:
         if len(rows) > limit:
             return rows[:limit], rows[limit - 1]["id"]
         return rows, None
+
+    def backup_to(self, path: str) -> int:
+        """Copy the whole log to `path` using SQLite's online backup.
+
+        A consistent snapshot while the notary keeps serving — unlike copying
+        the file, which can catch a half-written page. One file is a single
+        point of failure for the only off-site copy of anyone's audit heads, so
+        this wants to run on a schedule and land somewhere else.
+        """
+        with closing(sqlite3.connect(path)) as dest:
+            self._conn.backup(dest)
+        return self.count()
 
     def count(self) -> int:
         with closing(self._conn.cursor()) as cur:

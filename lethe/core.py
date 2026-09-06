@@ -2,7 +2,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
-from .audit import AuditLog
+from .audit import AuditContention, AuditLog
 from .certificate import build_certificate
 from .connectors.base import Connector
 from .hashing import hash_subject
@@ -39,6 +39,19 @@ def parse_allowed_namespaces(raw: str | None) -> dict[str, set[str]] | None:
             )
         allowed.setdefault(store.strip(), set()).add(namespace.strip())
     return allowed
+
+
+class ForgetRecordedIncompletely(Exception):
+    """The deletion happened; the completion audit entry did not.
+
+    Carries the certificate, because at this point it is the only durable
+    record of the run outside the chain — discarding it would lose the evidence
+    of a deletion that really occurred.
+    """
+
+    def __init__(self, message: str, *, certificate):
+        self.certificate = certificate
+        super().__init__(message)
 
 
 class NamespaceNotAllowed(Exception):
@@ -267,16 +280,34 @@ class Lethe:
             reverifiable=self.retain_verification_ids,
         )
 
-        self.audit.append(
-            {
-                "event": "forget",
-                "request_id": request_id,
-                "subject_hash": subject_hash,
-                "issued_at": issued_at,
-                "payload_hash": cert.payload_hash,
-                "all_verified": cert.payload["all_verified"],
-            }
-        )
+        try:
+            self.audit.append(
+                {
+                    "event": "forget",
+                    "request_id": request_id,
+                    "subject_hash": subject_hash,
+                    "issued_at": issued_at,
+                    "payload_hash": cert.payload_hash,
+                    "all_verified": cert.payload["all_verified"],
+                }
+            )
+        except AuditContention as exc:
+            # The rows are already gone. Letting a bare "could not append"
+            # surface here would read as "the forget failed", and the operator
+            # would retry a deletion that has in fact completed — finding zero
+            # rows the second time and concluding, wrongly, that nothing was
+            # ever deleted. Say what actually happened instead, and hand back
+            # the certificate: it is signed, it is accurate, and it is the only
+            # record of this run that now exists outside the chain.
+            raise ForgetRecordedIncompletely(
+                f"deletion COMPLETED ({cert.payload['records_deleted']} records "
+                f"across {cert.payload['layers_found']} layer(s)) but the audit "
+                f"chain would not accept the completion entry: {exc}. The "
+                f"forget_started entry at audit_head {audit_head} records that "
+                f"this run began. Do not re-run it — reconcile from the "
+                f"certificate, whose payload_hash is {cert.payload_hash}.",
+                certificate=cert,
+            ) from None
 
         # Only purge the provenance map once deletion is fully verified — otherwise
         # we keep the map so the operation can be retried.

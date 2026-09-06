@@ -14,6 +14,7 @@ certificates name is, by construction, the party entitled to that log.
 
 import asyncio
 import json
+import logging
 import secrets
 import time
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from starlette.routing import Route
 from lethe.signing import key_id_for, verify_signature
 
 from .payments import PaymentConfig, PaymentGate
+from .ratelimit import TokenBucket, client_key
 from .receipt import CLAIM, NOTARY_SCHEMA, NotarizationRefused, build_receipt
 from .store import WitnessLog
 
@@ -54,11 +56,19 @@ CHALLENGE_DOMAIN = "lethe-notary/challenge/v1"
 def challenge_message(notary_key_id: str, nonce: str) -> bytes:
     """The exact bytes a client must sign. Never sign the bare nonce."""
     return f"{CHALLENGE_DOMAIN}:{notary_key_id}:{nonce}".encode()
+logger = logging.getLogger("lethe_notary")
+
 MAX_CERTIFICATE_BYTES = 64 * 1024  # a real certificate is ~2.3 KB
 MAX_WITNESS_REQUEST_BYTES = 8 * 1024
 # Outstanding challenges are unauthenticated and free to request, so the store
 # needs a ceiling as well as a TTL.
 MAX_OUTSTANDING_CHALLENGES = 10_000
+
+# Per-client ceilings. Notarizing is real work (verify + sign + write), so it
+# is the tighter of the two; challenges are cheap but must not be usable to
+# exhaust the challenge cap.
+NOTARIZE_BURST, NOTARIZE_RATE = 20, 2.0        # 2/s, burst 20
+CHALLENGE_BURST, CHALLENGE_RATE = 30, 5.0      # 5/s, burst 30
 
 
 class ChallengeCapacityError(Exception):
@@ -74,8 +84,13 @@ def _error(code: str, message: str, status: int, retriable: bool = False):
 
 
 class Notary:
-    def __init__(self, *, signer, log: WitnessLog, gate: PaymentGate):
+    def __init__(self, *, signer, log: WitnessLog, gate: PaymentGate,
+                 previous_keys: tuple[str, ...] = (), trust_proxy: bool = False):
         self.signer = signer
+        self.previous_keys = previous_keys
+        self.trust_proxy = trust_proxy
+        self.notarize_limit = TokenBucket(NOTARIZE_BURST, NOTARIZE_RATE)
+        self.challenge_limit = TokenBucket(CHALLENGE_BURST, CHALLENGE_RATE)
         self.log = log
         self.gate = gate
         self.key_id = key_id_for(signer.public_key_b64())
@@ -135,6 +150,10 @@ async def notarize(request):
     notary: Notary = request.app.state.notary
     gate = notary.gate
 
+    if not notary.notarize_limit.allow(client_key(request)):
+        return _error("RATE_LIMITED", "too many requests; slow down", 429,
+                      retriable=True)
+
     # Checked BEFORE reading, when the client declares a length: awaiting the
     # body first would buffer the whole thing in memory and only then complain,
     # which turns the size limit into an amplifier rather than a guard.
@@ -172,7 +191,8 @@ async def notarize(request):
             prior = notary.log.existing(payload_hash)
             if prior is not None:
                 return JSONResponse({"ok": True, "receipt": prior,
-                                     "already_witnessed": True, "charged": False})
+                                     "already_witnessed": True,
+                                     "witness_recorded": True, "charged": False})
 
             if gate.enabled:
                 # Off the event loop: the facilitator call is synchronous
@@ -185,16 +205,49 @@ async def notarize(request):
                 if not paid:
                     return response
 
-            stored, is_new = notary.log.record(receipt)
+            try:
+                stored, is_new = notary.log.record(receipt)
+                witnessed = True
+            except Exception:
+                # Charged already. The signed receipt IS what the customer
+                # bought — it is the authoritative artifact, and the witness
+                # log is the notary's own convenience copy (see the README on
+                # why the log is not chained). Failing the whole request here
+                # would take their money and hand back nothing, which is the
+                # one outcome that must never happen.
+                #
+                # So return the receipt, say plainly that the off-site copy did
+                # not land, and make the operator's logs scream: this needs
+                # reconciling, and until it is, this certificate's head is not
+                # covered by the truncation argument.
+                logger.exception(
+                    "WITNESS LOG WRITE FAILED after payment: certificate %s was "
+                    "countersigned and charged but not recorded. Reconcile from "
+                    "the customer's receipt.", payload_hash,
+                )
+                return JSONResponse({
+                    "ok": True, "receipt": receipt, "already_witnessed": False,
+                    "charged": bool(gate.enabled),
+                    "witness_recorded": False,
+                    "warning": "The receipt is valid and signed, but the notary "
+                               "could not record it in its witness log. Keep this "
+                               "receipt: it is the evidence. This certificate's "
+                               "audit head is not covered by the notary's "
+                               "truncation check until the operator reconciles.",
+                }, status_code=200)
         finally:
             notary.release(payload_hash)
 
     return JSONResponse({"ok": True, "receipt": stored,
                          "already_witnessed": not is_new,
+                         "witness_recorded": witnessed,
                          "charged": bool(gate.enabled and is_new)})
 
 
 async def challenge(request):
+    if not request.app.state.notary.challenge_limit.allow(client_key(request)):
+        return _error("RATE_LIMITED", "too many requests; slow down", 429,
+                      retriable=True)
     try:
         issued = request.app.state.notary.issue_challenge()
     except ChallengeCapacityError:
@@ -270,6 +323,16 @@ async def well_known(request):
         "schema": NOTARY_SCHEMA,
         "notary_key_id": notary.key_id,
         "public_key": notary.signer.public_key_b64(),
+        # Every key this notary has ever signed with, current first. Receipts
+        # name the key that signed them, and a receipt must stay verifiable
+        # after a rotation — otherwise rotating the key silently invalidates
+        # every piece of evidence already sold. Verifiers resolve
+        # notary_key_id against this list (verify_receipt takes it as
+        # trusted_keys, the same shape lethe uses for certificates).
+        "keys": [
+            {"key_id": key_id_for(pk), "public_key": pk}
+            for pk in (notary.signer.public_key_b64(), *notary.previous_keys)
+        ],
         "claim": CLAIM,
         "paid": notary.gate.enabled,
         "price": notary.gate.config.price if notary.gate.enabled else None,
@@ -283,7 +346,8 @@ async def health(request):
 
 
 def create_app(*, signer, log: WitnessLog, config: PaymentConfig | None = None,
-               resource_server=None) -> Starlette:
+               resource_server=None, previous_keys: tuple[str, ...] = (),
+               trust_proxy: bool = False) -> Starlette:
     config = config or PaymentConfig.from_env()
     app = Starlette(routes=[
         Route("/notarize", notarize, methods=["POST"]),
@@ -295,5 +359,6 @@ def create_app(*, signer, log: WitnessLog, config: PaymentConfig | None = None,
     app.state.notary = Notary(
         signer=signer, log=log,
         gate=PaymentGate(config, resource_server=resource_server),
+        previous_keys=previous_keys, trust_proxy=trust_proxy,
     )
     return app

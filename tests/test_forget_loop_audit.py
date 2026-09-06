@@ -226,3 +226,53 @@ def test_a_forget_survives_an_audit_append_losing_the_race(env):
         cur.execute("SELECT count(*) FROM test_vectors")
         assert cur.fetchone()[0] == 0
     assert audit.verify_chain() is True
+
+
+def test_a_deletion_that_outruns_the_audit_chain_says_the_rows_are_gone(env):
+    """If the completion append exhausts its retries, the rows are ALREADY
+    deleted. A bare "could not append" reads as "the forget failed", and the
+    operator retries a deletion that has in fact completed — finding nothing
+    the second time and concluding, wrongly, that nothing was ever deleted.
+
+    The error has to say the deletion happened, and carry the certificate,
+    which at that point is the only record of the run outside the chain.
+    """
+    import pytest
+
+    from lethe.audit import AuditContention
+    from lethe.core import ForgetRecordedIncompletely
+
+    conn, ledger, audit, make = env
+    lethe = make()
+    for rid in ("r1", "r2", "r3"):
+        lethe.tag("alice@example.test", "pgvector", "test_vectors", rid)
+
+    real_append = audit.append
+    calls = {"n": 0}
+
+    def append(entry):
+        calls["n"] += 1
+        if entry.get("event") == "forget":       # the completion entry only
+            raise AuditContention("another writer is advancing the chain")
+        return real_append(entry)
+
+    audit.append = append
+    try:
+        with pytest.raises(ForgetRecordedIncompletely) as e:
+            lethe.forget("alice@example.test")
+    finally:
+        audit.append = real_append
+
+    message = str(e.value)
+    assert "deletion COMPLETED" in message
+    assert "Do not re-run it" in message
+    assert e.value.certificate.payload["records_deleted"] == 3
+
+    # The rows really are gone, so the message is telling the truth.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM test_vectors")
+        assert cur.fetchone()[0] == 0
+    # And forget_started is on the chain, recording that the run began.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM lethe_audit WHERE entry->>'event' = 'forget_started'")
+        assert cur.fetchone()[0] == 1

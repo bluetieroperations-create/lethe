@@ -9,6 +9,20 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **A `forget` that outruns the audit chain now says the rows are gone.** If
+  the completion append exhausts its retries under contention, the deletion has
+  *already* happened — but a bare `AuditContention` reads as "the forget
+  failed", and an operator would retry a deletion that completed, find nothing,
+  and conclude nothing was ever deleted. `Lethe.forget` now raises
+  `ForgetRecordedIncompletely`, which states that the deletion completed, names
+  the record count and the `forget_started` head, says not to re-run it, and
+  carries the certificate — at that point the only record of the run outside
+  the chain.
+
 ## [0.7.0] — 2026-09-06
 
 ### Fixed

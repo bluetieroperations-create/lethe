@@ -114,15 +114,32 @@ def build_receipt(cert: dict, *, signer, witnessed_at: str | None = None) -> dic
     }
 
 
-def verify_receipt(receipt: dict, trusted_public_key: str) -> dict:
+def verify_receipt(
+    receipt: dict,
+    trusted_public_key: str | None = None,
+    *,
+    trusted_keys: dict[str, str] | None = None,
+) -> dict:
     """Check a receipt against the notary's published key.
 
     Key-pinned like Lethe's own verifier, and for the same reason: a receipt
     checked only against the key inside it proves nothing, because anyone can
-    mint that pair. Returns {valid, reasons, detail}.
+    mint that pair.
+
+    Pass `trusted_keys={key_id: public_key}` — the `keys` list from
+    /.well-known/notary — rather than a single key when the notary may have
+    rotated. A receipt names the key that signed it, so without a registry a
+    rotation would silently invalidate every receipt already sold, which is the
+    opposite of what a durable piece of evidence is for. Exactly one of the two
+    arguments is required; neither is an unpinned check.
+
+    Returns {valid, reasons, detail}.
     """
     def fail(reason: str, detail: str) -> dict:
         return {"valid": False, "reasons": [reason], "detail": [detail]}
+
+    if (trusted_public_key is None) == (trusted_keys is None):
+        raise ValueError("pass exactly one of trusted_public_key or trusted_keys")
 
     if not isinstance(receipt, dict):
         return fail("MALFORMED", "receipt is not an object")
@@ -133,9 +150,25 @@ def verify_receipt(receipt: dict, trusted_public_key: str) -> dict:
     if not isinstance(payload, dict) or payload.get("schema") != NOTARY_SCHEMA:
         return fail("SCHEMA_MISMATCH", f"payload schema is not {NOTARY_SCHEMA}")
 
+    if trusted_keys is not None:
+        declared_key = payload.get("notary_key_id")
+        if declared_key is None or declared_key not in trusted_keys:
+            return fail(
+                "UNKNOWN_KEY_ID",
+                f"receipt names notary key {declared_key!r}, which is not in the "
+                f"provided registry (known: {sorted(trusted_keys)})",
+            )
+        pinned_b64 = trusted_keys[declared_key]
+    else:
+        # Bound explicitly rather than leaning on the exactly-one check above
+        # holding across a refactor — the same narrowing mypy flagged in
+        # lethe.cert_schema, and the same reason to be explicit about it.
+        assert trusted_public_key is not None
+        pinned_b64 = trusted_public_key
+
     try:
         embedded = base64.b64decode(receipt["public_key"], validate=True)
-        pinned = base64.b64decode(trusted_public_key, validate=True)
+        pinned = base64.b64decode(pinned_b64, validate=True)
     except Exception:
         return fail("KEY_MISMATCH", "public key is not valid base64")
     if not hmac.compare_digest(embedded, pinned):

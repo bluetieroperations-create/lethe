@@ -198,6 +198,48 @@ pytest -m live            # also contacts the real x402 facilitator
 LETHE_TEST_DATABASE_URL=... pytest    # also runs the truncation scenario
 ```
 
+### Rate limits
+
+`/notarize` allows 2/s (burst 20) per client, `/challenge` 5/s (burst 30);
+both answer `429` with `retriable: true`. Behind a proxy, pass `--trust-proxy`
+so the limiter buckets by `X-Forwarded-For` — **only** behind a proxy you
+control, since otherwise any caller mints a fresh identity per request and the
+limiter stops working for exactly the people it exists to stop.
+
+### Back up the witness log
+
+One SQLite file holds the only off-site copy of every customer's audit heads.
+It runs in WAL mode with `synchronous=FULL`, so a receipt handed to a customer
+is on disk before the response goes out — but that is durability, not backup.
+
+```bash
+lethe-notary backup --out /backups/witness-$(date +%F).db
+```
+
+Uses SQLite's online backup, so it is a consistent snapshot taken while the
+notary keeps serving. Ship it somewhere else, on a schedule.
+
+### Rotating the notary key
+
+Receipts name the key that signed them, so a rotation without a published key
+history silently invalidates every receipt already sold. Keep the retired keys
+published:
+
+```bash
+lethe-notary serve --previous-key <old base64 key> --previous-key <older>
+```
+
+They appear in `keys` at `/.well-known/notary`, and a verifier passes that list
+to `verify_receipt(receipt, trusted_keys={key_id: public_key})` — the same
+shape Lethe uses for certificates.
+
+### If a receipt comes back with `witness_recorded: false`
+
+The countersignature succeeded and you were charged, but the notary could not
+write its own copy. **Keep the receipt** — it is the evidence, and it is valid.
+What you do not have is coverage by the truncation check for that certificate's
+head until the operator reconciles. Re-presenting the certificate later is free.
+
 ### Run one process
 
 Idempotency — "this certificate is already witnessed, do not charge again" — is
