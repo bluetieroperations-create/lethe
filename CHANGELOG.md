@@ -45,6 +45,15 @@ that issued it.
   is shared, so a rollback in one thread aborts another's work. The MCP server
   holds a single connection and serializes tool bodies for exactly this reason.
 
+- **`lethe verify-audit` names a fork instead of only saying `INVALID`.**
+  `INVALID` covers a fork, a tampered entry and a truncated tail — three
+  situations calling for very different responses. An operator upgrading a
+  chain written before this release, reading `INVALID` as "we were breached"
+  when concurrent appends were the cause, has been told the wrong thing. The
+  command now prints `FORK: rows [n, m] all claim predecessor …` for each
+  split, and says that concurrency explains it. `AuditLog.forks()` is the
+  underlying query.
+
 - **`init_schema` upgrades an existing table in place**, adding the index to
   chains written by earlier versions. If such a chain already contains a fork
   the index cannot be built, and rather than a raw Postgres error this raises

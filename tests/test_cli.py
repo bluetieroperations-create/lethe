@@ -125,3 +125,50 @@ def test_audit_head_and_verify_audit_detect_truncation(conn):
     )
     assert r.exit_code == 1
     assert "INVALID" in r.output
+
+
+def test_verify_audit_names_a_fork_rather_than_only_saying_invalid(conn):
+    """INVALID alone cannot be acted on. A fork and a tampered entry are very
+    different situations, and an operator upgrading a chain written before
+    v0.7.0 who reads "INVALID" as "we were breached" has been told the wrong
+    thing. The output must distinguish them."""
+    from lethe.audit import AUDIT_SCHEMA, GENESIS, AuditLog
+
+    # A chain from before the uniqueness constraint, carrying a fork.
+    with conn.cursor() as cur:
+        cur.execute(AUDIT_SCHEMA)
+        for entry_hash in ("a" * 64, "b" * 64):
+            cur.execute(
+                "INSERT INTO lethe_audit (entry, prev_hash, entry_hash) "
+                "VALUES (%s, %s, %s)",
+                ('{"event": "forget"}', GENESIS, entry_hash),
+            )
+    conn.commit()
+    assert AuditLog(conn).verify_chain() is False
+
+    result = CliRunner().invoke(
+        cli, ["verify-audit", "--database-url", DATABASE_URL]
+    )
+    assert result.exit_code == 1
+    assert result.stdout.strip().endswith("INVALID")
+    # ...and says which rows forked, and that concurrency explains it.
+    assert "FORK: rows [1, 2]" in result.stderr
+    assert GENESIS in result.stderr
+    assert "without tampering" in result.stderr
+
+
+def test_verify_audit_on_an_intact_chain_reports_no_fork(conn):
+    """The control: a healthy chain must not emit a fork warning."""
+    from lethe.audit import AuditLog
+
+    log = AuditLog(conn)
+    log.init_schema()
+    for i in range(3):
+        log.append({"event": "forget", "n": i})
+
+    result = CliRunner().invoke(
+        cli, ["verify-audit", "--database-url", DATABASE_URL]
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip().endswith("VALID")
+    assert "FORK" not in result.stderr
