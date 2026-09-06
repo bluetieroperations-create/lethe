@@ -81,10 +81,10 @@ def test_the_notary_catches_a_truncated_chain(conn, notary_signer, log, free_con
         assert cur.fetchone()[0] < before
 
     # The notary can. Every head it witnessed must still be in the chain.
-    nonce = client.get("/challenge").json()["nonce"]
+    issued = client.get("/challenge").json()
     witnessed = client.post("/witness", content=json.dumps({
-        "public_key": operator.public_key_b64(), "nonce": nonce,
-        "signature": operator.sign(nonce.encode()),
+        "public_key": operator.public_key_b64(), "nonce": issued["nonce"],
+        "signature": operator.sign(issued["sign"].encode()),
     })).json()["witnessed"]
 
     with conn.cursor() as cur:
@@ -115,10 +115,10 @@ def test_an_intact_chain_produces_no_accusation(conn, notary_signer, log, free_c
             {"payload": cert.payload, "payload_hash": cert.payload_hash,
              "signature": cert.signature, "public_key": cert.public_key}))
 
-    nonce = client.get("/challenge").json()["nonce"]
+    issued = client.get("/challenge").json()
     witnessed = client.post("/witness", content=json.dumps({
-        "public_key": operator.public_key_b64(), "nonce": nonce,
-        "signature": operator.sign(nonce.encode()),
+        "public_key": operator.public_key_b64(), "nonce": issued["nonce"],
+        "signature": operator.sign(issued["sign"].encode()),
     })).json()["witnessed"]
 
     with conn.cursor() as cur:

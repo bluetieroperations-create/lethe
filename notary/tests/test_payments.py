@@ -210,10 +210,10 @@ def test_witness_retrieval_and_discovery_are_never_charged(paid, operator):
     client.post("/notarize", content=json.dumps(make_cert(operator)), headers=PAY)
     gate.charges = 0
 
-    nonce = client.get("/challenge").json()["nonce"]
+    issued = client.get("/challenge").json()
     r = client.post("/witness", content=json.dumps({
-        "public_key": operator.public_key_b64(), "nonce": nonce,
-        "signature": operator.sign(nonce.encode()),
+        "public_key": operator.public_key_b64(), "nonce": issued["nonce"],
+        "signature": operator.sign(issued["sign"].encode()),
     }))
     assert r.status_code == 200
     assert client.get("/health").status_code == 200

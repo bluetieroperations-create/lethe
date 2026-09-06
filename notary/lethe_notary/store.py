@@ -89,21 +89,33 @@ class WitnessLog:
                 raise
             return prior, False
 
-    def heads_for(self, certificate_public_key: str, limit: int = 1000) -> list[dict]:
-        """Every audit head witnessed for this key, oldest first.
+    def heads_for(
+        self, certificate_public_key: str, *, after: int = 0, limit: int = 1000
+    ) -> tuple[list[dict], int | None]:
+        """Heads witnessed for this key, oldest first, from `after` onward.
 
-        This is the dispute-resolution query, and the reason the service exists:
-        the operator's chain must still contain every head listed here. One
-        missing means entries were dropped after the notary saw them.
+        This is the dispute-resolution query, and the reason the service
+        exists: the operator's chain must still contain every head listed here,
+        and one missing means entries were dropped after the notary saw them.
+
+        Returns (rows, next_cursor). The cursor is not a nicety — silently
+        truncating THIS query is the worst failure the service has, because a
+        head that was witnessed but not returned reads exactly like a head that
+        was never witnessed, and the operator draws the opposite conclusion
+        from the one the evidence supports. One extra row is fetched purely to
+        decide whether more exist.
         """
         with closing(self._conn.cursor()) as cur:
             cur.execute(
-                "SELECT audit_head, witnessed_at, payload_hash, subject_hash"
-                " FROM witnessed WHERE certificate_public_key = ?"
+                "SELECT id, audit_head, witnessed_at, payload_hash, subject_hash"
+                " FROM witnessed WHERE certificate_public_key = ? AND id > ?"
                 " ORDER BY id ASC LIMIT ?",
-                (certificate_public_key, limit),
+                (certificate_public_key, after, limit + 1),
             )
-            return [dict(r) for r in cur.fetchall()]
+            rows = [dict(r) for r in cur.fetchall()]
+        if len(rows) > limit:
+            return rows[:limit], rows[limit - 1]["id"]
+        return rows, None
 
     def count(self) -> int:
         with closing(self._conn.cursor()) as cur:

@@ -82,6 +82,56 @@ key their certificates name is, by construction, the party entitled to that
 log. Challenges are single-use — a replayable nonce is a bearer token with
 extra steps, which is what this avoids.
 
+### Never sign the bare nonce
+
+You prove key control with the **same key that signs your certificates**, and
+the notary chooses the nonce. Signing a raw server-supplied string with that
+key is a signing oracle: a malicious or compromised notary can serve a
+canonical certificate payload *as* the nonce, and a naive client hands back a
+valid certificate signature. The attacker wraps it in an envelope and holds a
+certificate that verifies against your published key, attesting to deletions
+that never happened. This was demonstrated end to end against the first cut of
+this service.
+
+So sign the domain-separated message, which `/challenge` hands you verbatim in
+the `sign` field:
+
+```
+lethe-notary/challenge/v1:<notary_key_id>:<nonce>
+```
+
+A certificate payload is canonical JSON and always begins with `{`, so a
+message with this prefix can never be one. The notary's own key id is included
+so a signature harvested by one notary does not authenticate at another. The
+server **rejects** a bare-nonce signature rather than accepting both forms —
+accepting both would leave the oracle open.
+
+```python
+issued = requests.get(f"{NOTARY}/challenge").json()
+requests.post(f"{NOTARY}/witness", json={
+    "public_key": operator.public_key_b64(),
+    "nonce": issued["nonce"],
+    "signature": operator.sign(issued["sign"].encode()),   # NOT issued["nonce"]
+})
+```
+
+### Page the witness query to the end
+
+`/witness` returns at most 1000 heads per call, with `complete` and
+`next_after`. **Do not conclude anything from a page where `complete` is
+false.** A head that was witnessed but not returned looks exactly like a head
+that was never witnessed, which is the opposite of what the evidence says.
+Pass `after: next_after` until `complete` is true.
+
+## Why the notary does not chain its own log
+
+The witness log is append-only but not hash-chained, and that is deliberate:
+chaining it would only let the notary prove things to itself. **Your receipt is
+the authoritative artifact** — it is signed by the notary's published key, and
+you hold it. A notary that later denied witnessing your certificate would be
+contradicted by a signature it cannot repudiate. `/witness` is a convenience
+for finding what you were given; it is not the evidence. Keep your receipts.
+
 ## The log is private
 
 A public log would make the truncation argument stronger, but it would publish
@@ -147,6 +197,13 @@ pytest                    # offline
 pytest -m live            # also contacts the real x402 facilitator
 LETHE_TEST_DATABASE_URL=... pytest    # also runs the truncation scenario
 ```
+
+### Run one process
+
+Idempotency — "this certificate is already witnessed, do not charge again" — is
+arbitrated by a per-certificate lock inside the process. Running several notary
+workers against one witness database reopens the double-charge race. Run a
+single process, or move that arbitration into the database, before scaling out.
 
 **Not verified here:** an actually settled payment. That needs a funded wallet
 on the target network and a live facilitator, so the money movement itself is

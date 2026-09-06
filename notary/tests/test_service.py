@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import make_cert
 from lethe_notary.receipt import verify_receipt
-from lethe_notary.service import create_app
+from lethe_notary.service import challenge_message, create_app
 from starlette.testclient import TestClient
 
 from lethe.signing import Signer, key_id_for
@@ -70,11 +70,18 @@ def test_malformed_json_is_a_400_not_a_crash(client):
 # -- witness retrieval ------------------------------------------------------
 
 def _witness(client, signer, nonce=None):
-    nonce = nonce or client.get("/challenge").json()["nonce"]
+    """A compliant client: signs the domain-separated message, never the bare
+    nonce (see CHALLENGE_DOMAIN in service.py for why that distinction is the
+    difference between a proof and a signing oracle)."""
+    if nonce is None:
+        issued = client.get("/challenge").json()
+        nonce, message = issued["nonce"], issued["sign"].encode()
+    else:
+        message = challenge_message(client.app.state.notary.key_id, nonce)
     return client.post("/witness", content=json.dumps({
         "public_key": signer.public_key_b64(),
         "nonce": nonce,
-        "signature": signer.sign(nonce.encode()),
+        "signature": signer.sign(message),
     }))
 
 
@@ -101,14 +108,65 @@ def test_someone_elses_key_cannot_read_your_log(client, operator):
 
 
 def test_a_signature_from_the_wrong_key_is_refused(client, operator):
+    issued = client.get("/challenge").json()
+    r = client.post("/witness", content=json.dumps({
+        "public_key": operator.public_key_b64(),
+        "nonce": issued["nonce"],
+        "signature": Signer.generate().sign(issued["sign"].encode()),  # not operator's
+    }))
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "SIGNATURE_INVALID"
+
+
+def test_signing_the_bare_nonce_is_refused(client, operator):
+    """The naive reading of "sign the nonce" must FAIL, not be quietly
+    accepted. Accepting both forms would leave the signing oracle wide open:
+    the operator signs with the same key that signs certificates, and the
+    server picks the nonce, so a malicious notary could serve a canonical
+    certificate payload as the nonce and harvest a valid certificate
+    signature. Prefixing makes the two message spaces disjoint — a certificate
+    payload is canonical JSON and always starts with "{"."""
     nonce = client.get("/challenge").json()["nonce"]
     r = client.post("/witness", content=json.dumps({
         "public_key": operator.public_key_b64(),
         "nonce": nonce,
-        "signature": Signer.generate().sign(nonce.encode()),  # not operator's
+        "signature": operator.sign(nonce.encode()),  # the bare nonce
     }))
     assert r.status_code == 401
-    assert r.json()["error"]["code"] == "SIGNATURE_INVALID"
+    assert "not the bare nonce" in r.json()["error"]["message"]
+
+
+def test_the_challenge_tells_the_client_exactly_what_to_sign(client):
+    """So a correct client never has to guess the construction."""
+    issued = client.get("/challenge").json()
+    key_id = client.app.state.notary.key_id
+    assert issued["sign"] == f"lethe-notary/challenge/v1:{key_id}:{issued['nonce']}"
+    # Structurally impossible to be a certificate payload.
+    assert not issued["sign"].lstrip().startswith("{")
+
+
+def test_a_signature_harvested_by_one_notary_is_useless_at_another(
+    operator, notary_signer, log, free_config, tmp_path
+):
+    """The notary's own key id is in the signed message, so a signature
+    obtained by notary A does not authenticate at notary B."""
+    from lethe_notary.store import WitnessLog
+
+    other_signer = Signer.generate()
+    other = create_app(signer=other_signer, log=WitnessLog(str(tmp_path / "b.db")),
+                       config=free_config)
+    app_a = create_app(signer=notary_signer, log=log, config=free_config)
+
+    with TestClient(app_a) as a, TestClient(other) as b:
+        nonce = a.get("/challenge").json()["nonce"]
+        harvested = operator.sign(challenge_message(app_a.state.notary.key_id, nonce))
+        # Replay it at B, which happens to have issued the same nonce.
+        b.app.state.notary._challenges[nonce] = __import__("time").monotonic() + 120
+        r = b.post("/witness", content=json.dumps({
+            "public_key": operator.public_key_b64(), "nonce": nonce,
+            "signature": harvested,
+        }))
+    assert r.status_code == 401
 
 
 def test_a_challenge_cannot_be_replayed(client, operator):
