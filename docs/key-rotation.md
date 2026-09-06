@@ -52,18 +52,27 @@ needs the right historical key.
 
 ## Verifying an old certificate after rotation
 
-Read `payload.key_id`, look it up in your published key list, and pass that
-key as the trusted key:
+Hand the verifier your whole key list. The certificate names its own epoch,
+so the lookup is the verifier's job, not yours:
 
 ```python
 from lethe.cert_schema import verify_certificate_json
 
-kid = cert["payload"]["key_id"]
-result = verify_certificate_json(cert, trusted_public_key=KEYS[kid])
+KEYS = {                      # every epoch you have published, retired included
+    "ed25519:3f9c1a…": "…",
+    "ed25519:b7e204…": "…",
+}
+result = verify_certificate_json(cert, trusted_keys=KEYS)
 ```
 
-Passing the *current* key to verify an *old* certificate fails with
-`KEY_MISMATCH` — correctly. That is the pin working, not a bug.
+A certificate naming an epoch you did not supply fails with `UNKNOWN_KEY_ID` —
+distinct from `KEY_MISMATCH`, because the certificate is fine and the verifier
+simply has not been given that key. Certificates predating `lethe.cert/3` carry
+no `key_id`; pass their key explicitly with `trusted_public_key`.
+
+Passing the *current* key alone to verify an *old* certificate still fails
+with `KEY_MISMATCH` — correctly. The registry makes rotation usable; it does
+not loosen the pin.
 
 ## If a key is compromised
 

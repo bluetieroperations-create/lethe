@@ -9,6 +9,37 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [0.5.0] — 2026-09-06
+
+### Added
+
+- **Verification against a registry of historical keys.**
+  `verify_certificate_json(cert, trusted_keys={key_id: public_key})` — and the
+  same on `verify_certificate`. cert v3 made certificates self-describing about
+  which key epoch signed them, but both verifiers took a single key, so
+  `docs/key-rotation.md` had to tell readers to hand-maintain the mapping and
+  do the lookup themselves. The certificate knows; the verifier now reads it.
+
+  A certificate naming an epoch that is not in the registry fails with the new
+  `UNKNOWN_KEY_ID`, kept distinct from `KEY_MISMATCH` because the certificate
+  is fine and the verifier simply has not been given that key. Certificates
+  predating `lethe.cert/3` carry no `key_id` and report the same, saying so.
+  Passing the current key alone to an old certificate still fails: the registry
+  makes rotation usable, it does not loosen the pin.
+
+- **`lethe anchor --emit FILE`** — writes a self-contained anchor record (the
+  attested head, the raw RFC 3161 token, and the `openssl` command to check
+  them) for publishing alongside your public key. `docs/anchoring.md` says
+  anchoring closes backdating on its own but closes tail truncation only if a
+  token also lives somewhere the operator cannot reach; there was previously no
+  way to get one out. A token that exists only inside the chain disappears with
+  the chain.
+
+- **Dependabot no longer re-proposes the `mcp` major bump.** The `<2` bound is
+  deliberate — 2.x renamed `FastMCP` to `MCPServer` and `lethe/mcp.py` is still
+  v1 code — so the same PR was reopening weekly (#5). Remove the ignore entry
+  as part of the 2.x migration, not before.
+
 ## [0.4.0] — 2026-09-05
 
 ### Added
@@ -214,6 +245,7 @@ First working version.
 - Audit truncation head-pin, honest certification of unknown stores, and fixes
   for untagged-write and cross-subject deletion leaks in the wrapper.
 
+[0.5.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.5.0
 [0.4.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.4.0
 [0.3.1]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/bluetieroperations-create/lethe/releases/tag/v0.3.0

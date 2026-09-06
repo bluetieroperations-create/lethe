@@ -70,18 +70,70 @@ def schema_errors(data) -> list[str]:
     ]
 
 
-def verify_certificate_json(data, trusted_public_key: str) -> dict:
-    """Verify a certificate received as JSON. The trusted key is REQUIRED:
+def verify_certificate_json(
+    data,
+    trusted_public_key: str | None = None,
+    *,
+    trusted_keys: dict[str, str] | None = None,
+) -> dict:
+    """Verify a certificate received as JSON. A trusted key is REQUIRED:
     an unpinned check only proves self-consistency, never authenticity.
+
+    Pass exactly one of:
+
+    * ``trusted_public_key`` — a single key, when you know which one signed.
+    * ``trusted_keys`` — ``{key_id: public_key}``, and the certificate's own
+      ``key_id`` selects from it. This is what makes rotation usable: a
+      certificate is self-describing about which key epoch signed it, so the
+      verifier can do the lookup instead of the caller hand-maintaining it.
+      Certificates predating ``lethe.cert/3`` carry no ``key_id`` and cannot be
+      resolved this way — pass their key explicitly.
+
     Reasons an agent can branch on, checked in order:
-    SCHEMA_MISMATCH -> KEY_MISMATCH -> KEY_ID_MISMATCH -> PAYLOAD_TAMPERED ->
-    BAD_SIGNATURE."""
+    SCHEMA_MISMATCH -> UNKNOWN_KEY_ID -> KEY_MISMATCH -> KEY_ID_MISMATCH ->
+    PAYLOAD_TAMPERED -> BAD_SIGNATURE.
+    """
+    if (trusted_public_key is None) == (trusted_keys is None):
+        raise ValueError(
+            "pass exactly one of trusted_public_key or trusted_keys; an unpinned "
+            "check proves only self-consistency, never authenticity"
+        )
+
     errors = schema_errors(data)
     if errors:
         return {"valid": False, "reasons": ["SCHEMA_MISMATCH"], "detail": errors}
+
+    if trusted_keys is not None:
+        # Resolve BEFORE any comparison, so an unrecognised key epoch is
+        # reported as such rather than surfacing as a confusing KEY_MISMATCH
+        # against whichever key happened to be tried.
+        declared = data["payload"].get("key_id")
+        if declared is None:
+            return {
+                "valid": False, "reasons": ["UNKNOWN_KEY_ID"],
+                "detail": [
+                    "certificate predates lethe.cert/3 and carries no key_id; "
+                    "pass trusted_public_key explicitly to verify it"
+                ],
+            }
+        if declared not in trusted_keys:
+            return {
+                "valid": False, "reasons": ["UNKNOWN_KEY_ID"],
+                "detail": [
+                    f"certificate names key epoch {declared!r}, which is not in the "
+                    f"provided registry ({', '.join(sorted(trusted_keys)) or 'empty'})"
+                ],
+            }
+        pinned = trusted_keys[declared]
+    else:
+        # Bound explicitly rather than leaning on the exactly-one check above
+        # holding across a refactor.
+        assert trusted_public_key is not None
+        pinned = trusted_public_key
+
     try:
         embedded = base64.b64decode(data["public_key"], validate=True)
-        trusted = base64.b64decode(trusted_public_key, validate=True)
+        trusted = base64.b64decode(pinned, validate=True)
     except Exception:
         return {
             "valid": False, "reasons": ["KEY_MISMATCH"],

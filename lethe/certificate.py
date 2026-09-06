@@ -161,7 +161,12 @@ def build_certificate(
     )
 
 
-def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
+def verify_certificate(
+    cert: Certificate,
+    trusted_public_key: str | None = None,
+    *,
+    trusted_keys: dict[str, str] | None = None,
+) -> bool:
     """Verify a deletion certificate. Key pinning is MANDATORY.
 
     SECURITY: a certificate carries the public key that signed it, so a
@@ -174,9 +179,23 @@ def verify_certificate(cert: Certificate, trusted_public_key: str) -> bool:
     are no longer offered. The certificate's embedded key must match the
     trusted key before the signature is even checked.
     """
+    if (trusted_public_key is None) == (trusted_keys is None):
+        raise ValueError("pass exactly one of trusted_public_key or trusted_keys")
+
+    if trusted_keys is not None:
+        # {key_id: public_key}; the certificate names its own key epoch. See
+        # verify_certificate_json for the reasoning and docs/key-rotation.md.
+        declared = cert.payload.get("key_id")
+        if declared is None or declared not in trusted_keys:
+            return False
+        pinned = trusted_keys[declared]
+    else:
+        assert trusted_public_key is not None
+        pinned = trusted_public_key
+
     try:
         embedded = base64.b64decode(cert.public_key, validate=True)
-        trusted = base64.b64decode(trusted_public_key, validate=True)
+        trusted = base64.b64decode(pinned, validate=True)
     except Exception:
         return False
     if not hmac.compare_digest(embedded, trusted):

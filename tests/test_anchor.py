@@ -11,6 +11,7 @@ A live test against a real authority is in test_anchor_live.py.
 
 import base64
 import hashlib
+import os
 import urllib.request
 from datetime import UTC, datetime
 
@@ -251,3 +252,74 @@ def test_failed_anchoring_leaves_the_chain_untouched(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM lethe_audit WHERE entry->>'event' = 'anchor'")
         assert cur.fetchone()[0] == 0
+
+
+# --- emitting an anchor for publication ---
+
+
+def test_entry_by_hash_returns_the_anchor_record(conn):
+    """Emitting reads the token back out of the chain rather than holding it
+    across the call — the chain is where the evidence lives."""
+    from lethe.audit import AuditLog
+
+    audit = AuditLog(conn)
+    audit.init_schema()
+    result = audit.anchor_head(
+        Rfc3161Anchor("https://tsa.example/tsr", transport=_fake_tsa())
+    )
+    entry = audit.entry_by_hash(result["entry_hash"])
+    assert entry["event"] == "anchor"
+    assert entry["anchored_head"] == result["anchored_head"]
+    assert base64.b64decode(entry["token"]).startswith(b"\x30")
+
+
+def test_entry_by_hash_raises_on_an_unknown_hash(conn):
+    from lethe.audit import AuditLog
+
+    audit = AuditLog(conn)
+    audit.init_schema()
+    with pytest.raises(KeyError, match="no audit entry"):
+        audit.entry_by_hash("f" * 64)
+
+
+def test_anchor_emit_writes_a_self_contained_record(conn, tmp_path, monkeypatch):
+    """The emitted file is the copy that lives outside the operator's reach, so
+    it must carry everything a third party needs: the head that was attested,
+    and the raw token to check it against. Without both, publishing it proves
+    nothing."""
+    import json
+
+    from click.testing import CliRunner
+
+    from lethe.audit import AuditLog
+    from lethe.cli import cli
+
+    AuditLog(conn).init_schema()
+
+    # Keep the real CLI path but stub the authority, so this stays offline.
+    import lethe.anchor as anchor_module
+
+    real = anchor_module.Rfc3161Anchor
+
+    def _stubbed(url, **kwargs):
+        return real(url, transport=_fake_tsa(), **{k: v for k, v in kwargs.items()
+                                                   if k != "transport"})
+
+    monkeypatch.setattr(anchor_module, "Rfc3161Anchor", _stubbed)
+
+    out = tmp_path / "anchor-public.json"
+    result = CliRunner().invoke(
+        cli,
+        ["anchor", "--database-url", os.environ["LETHE_TEST_DATABASE_URL"],
+         "--emit", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+
+    record = json.loads(out.read_text())
+    assert record["anchored_at"] == GEN_TIME.isoformat()
+    assert record["digest_algorithm"] == "sha256"
+    # The two things a verifier cannot proceed without.
+    assert len(record["anchored_head"]) == 64
+    assert base64.b64decode(record["token"]).startswith(b"\x30")
+    # And a pointer to how, so the file is useful without the docs to hand.
+    assert "openssl ts -verify" in record["verify"]

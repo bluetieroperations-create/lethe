@@ -47,8 +47,11 @@ destroyed.
 Anchoring therefore only closes truncation if a token also lives somewhere the
 operator cannot reach. Two cheap ways, both worth doing:
 
-- **Publish anchor tokens** (or just the anchored head plus its `anchored_at`)
-  wherever you publish your trusted public key.
+- **Publish anchor tokens.** `lethe anchor --emit anchor-public.json` writes a
+  self-contained record — the head that was attested, the raw token, and the
+  `openssl` command to check them — which you publish wherever you publish your
+  trusted public key. A copy you do not control is the whole point: a token
+  that only exists in the chain disappears with the chain.
 - **Let recipients be witnesses.** Every certificate names the `audit_head` its
   run started from, so anyone holding a certificate holds evidence of chain
   state at that time. Multiple recipients means multiple independent witnesses,
