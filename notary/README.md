@@ -142,13 +142,25 @@ append-only and readable only by whoever controls the key that wrote to it.
 ## Running it
 
 ```bash
-pip install -e .
+pip install -e .                # from this directory; installs lethe-delete too
 lethe-notary keygen --out notary.key          # back this up offline
 export LETHE_NOTARY_KEY_FILE=notary.key
 export LETHE_NOTARY_PAY_TO=0xYourAddress
 export LETHE_NOTARY_PRICE='$0.02'
 lethe-notary serve
 ```
+
+If `lethe-notary` is not found, its console script landed in a Scripts/bin
+directory that is not on PATH. Every command also works as a module, which
+sidesteps PATH entirely:
+
+```bash
+python -m lethe_notary.cli serve
+```
+
+On Windows PowerShell, environment variables are `$env:NAME = "value"`, and
+the price must be in **single** quotes — `$env:LETHE_NOTARY_PRICE = '$0.02'` —
+so the shell does not try to expand `$0`.
 
 The signing key **is** the service: everything a customer buys is a signature
 from it, and every receipt already issued becomes unverifiable if it is lost.
