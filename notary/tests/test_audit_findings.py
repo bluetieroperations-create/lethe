@@ -94,7 +94,7 @@ def test_a_slow_facilitator_does_not_block_unrelated_requests(
 
         def charge(self, request):
             time.sleep(0.25)
-            return True, None
+            return {}
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     app.state.notary.gate = SlowGate()
@@ -131,7 +131,7 @@ def test_the_same_certificate_presented_concurrently_is_charged_once(
         def charge(self, request):
             time.sleep(0.05)          # widen the window
             self.charges += 1
-            return True, None
+            return {}
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     gate = CountingGate()
@@ -238,6 +238,10 @@ def test_a_non_object_witness_body_is_a_400_not_a_crash(client, body):
 # -- second audit pass ------------------------------------------------------
 
 
+SETTLEMENT = {"settlement_confirmed": True, "transaction": "0x" + "ef" * 32,
+              "network": "eip155:84532", "payer": "0x" + "12" * 20}
+
+
 def test_a_customer_is_never_charged_and_handed_nothing(
     notary_signer, log, free_config, operator
 ):
@@ -254,7 +258,7 @@ def test_a_customer_is_never_charged_and_handed_nothing(
 
         def charge(self, request):
             self.charges += 1
-            return True, None
+            return dict(SETTLEMENT)
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     gate = Gate()
@@ -278,6 +282,10 @@ def test_a_customer_is_never_charged_and_handed_nothing(
     assert body["witness_recorded"] is False
     assert body["charged"] is True
     assert "not covered by the notary's truncation check" in body["warning"]
+    # ...and keep the on-chain reference, which they need MOST here: they paid,
+    # the notary lost its own copy, and the transaction hash is the only thing
+    # that lets them prove the payment independently of this service.
+    assert body["payment"] == SETTLEMENT
 
 
 def test_notarize_is_rate_limited(client, operator):

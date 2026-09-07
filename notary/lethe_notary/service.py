@@ -18,15 +18,17 @@ import logging
 import secrets
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from lethe.signing import key_id_for, verify_signature
+from lethe.signing import Signer, key_id_for, verify_signature
 
-from .payments import PaymentConfig, PaymentGate
+from .payments import PaymentConfig, PaymentGate, network_kind
 from .ratelimit import TokenBucket, client_key
 from .receipt import CLAIM, NOTARY_SCHEMA, NotarizationRefused, build_receipt
 from .store import WitnessLog
@@ -56,6 +58,8 @@ CHALLENGE_DOMAIN = "lethe-notary/challenge/v1"
 def challenge_message(notary_key_id: str, nonce: str) -> bytes:
     """The exact bytes a client must sign. Never sign the bare nonce."""
     return f"{CHALLENGE_DOMAIN}:{notary_key_id}:{nonce}".encode()
+
+
 logger = logging.getLogger("lethe_notary")
 
 MAX_CERTIFICATE_BYTES = 64 * 1024  # a real certificate is ~2.3 KB
@@ -75,7 +79,8 @@ class ChallengeCapacityError(Exception):
     """Too many unconsumed challenges outstanding."""
 
 
-def _error(code: str, message: str, status: int, retriable: bool = False):
+def _error(code: str, message: str, status: int,
+           retriable: bool = False) -> JSONResponse:
     return JSONResponse(
         {"ok": False, "error": {"code": code, "message": message,
                                 "retriable": retriable}},
@@ -84,8 +89,9 @@ def _error(code: str, message: str, status: int, retriable: bool = False):
 
 
 class Notary:
-    def __init__(self, *, signer, log: WitnessLog, gate: PaymentGate,
-                 previous_keys: tuple[str, ...] = (), trust_proxy: bool = False):
+    def __init__(self, *, signer: Signer, log: WitnessLog, gate: PaymentGate,
+                 previous_keys: tuple[str, ...] = (),
+                 trust_proxy: bool = False) -> None:
         self.signer = signer
         self.previous_keys = previous_keys
         self.trust_proxy = trust_proxy
@@ -117,7 +123,7 @@ class Notary:
             self._inflight.pop(payload_hash, None)
 
     # -- challenges ------------------------------------------------------
-    def issue_challenge(self) -> dict:
+    def issue_challenge(self) -> dict[str, object]:
         self._reap()
         if len(self._challenges) >= MAX_OUTSTANDING_CHALLENGES:
             # Challenges are free and unauthenticated, so an unbounded store is
@@ -146,7 +152,7 @@ class Notary:
         return self._challenges.pop(nonce, None) is not None
 
 
-async def notarize(request):
+async def notarize(request: Request) -> JSONResponse:
     notary: Notary = request.app.state.notary
     gate = notary.gate
 
@@ -186,7 +192,7 @@ async def notarize(request):
         )
 
     payload_hash = cert["payload_hash"]
-    settlement = None
+    settlement: dict[str, object] | None = None
     async with notary.lock_for(payload_hash):
         try:
             prior = notary.log.existing(payload_hash)
@@ -202,10 +208,12 @@ async def notarize(request):
                 # dispute query, and /health. Measured before this change:
                 # four concurrent notarizations against a 0.3s facilitator
                 # took 1.23s, i.e. fully serialized.
-                paid, detail = await run_in_threadpool(gate.charge, request)
-                if not paid:
-                    return detail
-                settlement = detail
+                charged = await run_in_threadpool(gate.charge, request)
+                # A response instead of a settlement record means the gate
+                # refused: no money moved, and its 402 is what the caller needs.
+                if isinstance(charged, JSONResponse):
+                    return charged
+                settlement = charged
 
             try:
                 stored, is_new = notary.log.record(receipt)
@@ -254,7 +262,7 @@ async def notarize(request):
     return JSONResponse(body)
 
 
-async def challenge(request):
+async def challenge(request: Request) -> JSONResponse:
     if not request.app.state.notary.challenge_limit.allow(client_key(request)):
         return _error("RATE_LIMITED", "too many requests; slow down", 429,
                       retriable=True)
@@ -266,7 +274,7 @@ async def challenge(request):
     return JSONResponse({"ok": True, **issued})
 
 
-async def witness(request):
+async def witness(request: Request) -> JSONResponse:
     """Read back every head witnessed for a key. Free, and gated by signature.
 
     Free on purpose: this is the query an operator runs during a dispute or an
@@ -287,10 +295,15 @@ async def witness(request):
     if not isinstance(body, dict):
         return _error("MALFORMED", "body must be an object", 400)
 
+    # Bound one at a time rather than checked with a generator over the three:
+    # `all(isinstance(v, str) for v in ...)` guards the values at runtime but
+    # narrows nothing, so every use below stays `Any | None` and a type checker
+    # cannot tell a validated string from a missing key.
     public_key = body.get("public_key")
     nonce = body.get("nonce")
     signature = body.get("signature")
-    if not all(isinstance(v, str) for v in (public_key, nonce, signature)):
+    if not (isinstance(public_key, str) and isinstance(nonce, str)
+            and isinstance(signature, str)):
         return _error("MALFORMED",
                       "public_key, nonce and signature are all required", 400)
     if not notary.consume_challenge(nonce):
@@ -327,7 +340,7 @@ async def witness(request):
     })
 
 
-async def well_known(request):
+async def well_known(request: Request) -> JSONResponse:
     notary: Notary = request.app.state.notary
     return JSONResponse({
         "schema": NOTARY_SCHEMA,
@@ -347,16 +360,23 @@ async def well_known(request):
         "paid": notary.gate.enabled,
         "price": notary.gate.config.price if notary.gate.enabled else None,
         "network": notary.gate.config.network if notary.gate.enabled else None,
+        # An agent deciding whether to pay should not have to keep its own
+        # table of chain ids to find out whether the price is real money.
+        "network_kind": (
+            network_kind(notary.gate.config.network) if notary.gate.enabled else None
+        ),
     })
 
 
-async def health(request):
+async def health(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "witnessed": request.app.state.notary.log.count(),
                          "now": datetime.now(UTC).isoformat()})
 
 
-def create_app(*, signer, log: WitnessLog, config: PaymentConfig | None = None,
-               resource_server=None, previous_keys: tuple[str, ...] = (),
+def create_app(*, signer: Signer, log: WitnessLog,
+               config: PaymentConfig | None = None,
+               resource_server: Any | None = None,
+               previous_keys: tuple[str, ...] = (),
                trust_proxy: bool = False) -> Starlette:
     config = config or PaymentConfig.from_env()
     app = Starlette(routes=[

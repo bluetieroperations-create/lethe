@@ -12,11 +12,22 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "click>=8.1",
-    "x402>=2,<3",
+    # [evm] and [httpx], not bare x402. Measured on a clean venv:
+    #   bare x402      -> PaymentGate.server() raises ImportError,
+    #                     "EVM mechanism requires ethereum packages"
+    #   x402[evm] only -> preflight fails, "No module named 'httpx'"
+    # Either way the notary installs cleanly, starts, and cannot take a
+    # payment. Missing eth_utils (also under [evm]) additionally makes the
+    # EIP-55 check on LETHE_NOTARY_PAY_TO silently accept a mistyped payee.
+    "x402[evm,httpx]>=2,<3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx2>=2", "ruff>=0.6", "mypy>=1.11"]
+# httpx, not httpx2: starlette's TestClient imports `httpx`, and the
+# distribution named httpx2 ships a module called `httpx2` instead. The
+# tests passed anyway only because httpx arrives transitively; a clean
+# install of this extra could not import TestClient at all.
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 lethe-notary = "lethe_notary.cli:cli"

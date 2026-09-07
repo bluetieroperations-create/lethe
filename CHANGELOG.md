@@ -9,6 +9,66 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **`lethe-notary` declared `x402>=2` but the payment path needs `x402[evm]`
+  and `x402[httpx]`.** A clean install started the service and could not take a
+  payment. Measured on a clean venv: bare `x402` raises `ImportError` from
+  `x402.mechanisms.evm.exact.register` ("EVM mechanism requires ethereum
+  packages"), and `x402[evm]` without `httpx` fails preflight with "No module
+  named 'httpx'". Invisible locally, where `eth_account`, `eth_utils` and
+  `httpx` all arrive transitively. Missing `eth_utils` additionally disabled
+  the EIP-55 checksum on `LETHE_NOTARY_PAY_TO` in silence — confirmed by
+  feeding it an address with one wrong character, which it accepted.
+- **`lethe-notary[dev]` declared `httpx2`, which is a real distribution that
+  ships a module named `httpx2`.** Starlette's `TestClient` imports `httpx`. The
+  tests passed only because `httpx` arrived transitively; a clean install of the
+  extra could not import `TestClient` at all.
+- **`notary/tools/pay.py` overwrote the previous receipt.** A fixed
+  `receipt.json` meant buying a second certificate destroyed the first
+  receipt — the artifact the tool's own output calls "the evidence". Measured:
+  two purchases left one file. Receipts are now named after the certificate's
+  payload hash, and a differing receipt at that path is refused rather than
+  replaced. Re-running the same certificate rewrites an identical file, so the
+  idempotency check stays a two-command exercise.
+- **`pay.py` crashed with a bare `KeyError` on a 402 carrying no
+  `PAYMENT-REQUIRED` header** — a stripped header or a URL that is not a
+  notary. It now says which, and exits 2.
+- **`PaymentGate.charge` returned `tuple[bool, object | None]`**, and an
+  `object` in the return position meant a type checker could see nothing about
+  its callers — including the three route handlers whose bodies `mypy` was
+  therefore skipping entirely. It now returns either the response to send or
+  the settlement record, so the two outcomes are distinguishable by type.
+  Checking those bodies immediately surfaced six unnarrowed values in
+  `/witness`, where `all(isinstance(v, str) for v in ...)` validates at runtime
+  but narrows nothing.
+
+### Added
+
+- **`notary/` is now covered by CI**: `ruff`, `mypy`, its own test run, and a
+  no-extras install job that imports the whole paid path and quotes a price.
+  It was checked by hand for three releases, which is another way of saying
+  nobody was checking. Dependabot now watches `notary/pyproject.toml` too.
+- **The notary says whether it is charging real money.** `network_kind()`
+  classifies a CAIP-2 id as `testnet`, `mainnet` or `unknown` — never guessing,
+  because assuming either way is unsafe in a different direction. The startup
+  banner and `/.well-known/notary` both report it, so an operator one
+  environment variable away from mainnet, and an agent deciding whether to pay,
+  can both tell.
+- **`notary/tools/pay.py`** — the buyer side of the x402 flow. It exists to be
+  run twice: the second run of the same certificate must report
+  `charged: false` and settle nothing, which is the idempotency guarantee the
+  payment design rests on.
+- The skipped-test guard in CI now covers the notary's suite as well, and fails
+  on a missing report rather than passing over a run that never happened.
+- Two tests for the settlement reference the notary hands back — the payer's
+  only independent proof the money moved. v0.7.0 fixed the bug that discarded
+  it, but the fix was guarded only by `live`-marked tests that CI never runs:
+  dropping the payment block from either the normal response or the
+  witness-write-failure response left the whole offline suite green.
+
 ## [0.7.0] — 2026-09-07
 
 ### Added
