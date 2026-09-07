@@ -21,8 +21,9 @@ python search.py "senior React engineer in Berlin, fintech"   # Alice no longer 
 Then open the verifier (`verify.html`, in this directory — no server needed), paste `cert.json`
 + the printed public key → **VALID**. Tamper a field → **INVALID**.
 
-Run `python setup.py` again to reset between demos. Full talk-track in
-[`RUNBOOK.md`](RUNBOOK.md).
+Run `python setup.py` again to reset between demos. Full talk-track for a
+live call in [`RUNBOOK.md`](RUNBOOK.md); the shot list for the silent 90-second
+version is in [`RECORDING.md`](RECORDING.md).
 
 ## On a prospect's stack
 Point `DEMO_DATABASE_URL` at *their* throwaway Postgres, or swap the pgvector
