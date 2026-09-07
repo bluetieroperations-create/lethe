@@ -12,11 +12,20 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "click>=8.1",
-    "x402>=2,<3",
+    # [evm] and [httpx], not bare x402: the payment path imports
+    # x402.http (HTTPFacilitatorClientSync) and
+    # x402.mechanisms.evm.exact.register, and both sit behind extras.
+    # Bare x402 installs cleanly, starts the notary, passes preflight in
+    # free mode — and raises ImportError on the first paid request.
+    "x402[evm,httpx]>=2,<3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx2>=2", "ruff>=0.6", "mypy>=1.11"]
+# httpx, not httpx2: starlette's TestClient imports `httpx`, and the
+# distribution named httpx2 ships a module called `httpx2` instead. The
+# tests passed anyway only because httpx arrives transitively; a clean
+# install of this extra could not import TestClient at all.
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 lethe-notary = "lethe_notary.cli:cli"

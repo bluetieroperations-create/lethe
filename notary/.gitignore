@@ -4,4 +4,6 @@
 # throwaway key, and committing it made `git pull` abort for anyone who had
 # generated their own — which is everyone following the payment walkthrough.
 certificate.json
-pay.py
+# receipt.json is what tools/pay.py writes: the customer's own evidence, one
+# per purchase. Not a repo artifact.
+receipt.json

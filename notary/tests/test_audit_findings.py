@@ -94,7 +94,7 @@ def test_a_slow_facilitator_does_not_block_unrelated_requests(
 
         def charge(self, request):
             time.sleep(0.25)
-            return True, None
+            return {}
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     app.state.notary.gate = SlowGate()
@@ -131,7 +131,7 @@ def test_the_same_certificate_presented_concurrently_is_charged_once(
         def charge(self, request):
             time.sleep(0.05)          # widen the window
             self.charges += 1
-            return True, None
+            return {}
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     gate = CountingGate()
@@ -254,7 +254,7 @@ def test_a_customer_is_never_charged_and_handed_nothing(
 
         def charge(self, request):
             self.charges += 1
-            return True, None
+            return {}
 
     app = create_app(signer=notary_signer, log=log, config=free_config)
     gate = Gate()

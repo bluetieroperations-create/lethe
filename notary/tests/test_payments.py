@@ -4,7 +4,12 @@ import json
 
 import pytest
 from conftest import make_cert
-from lethe_notary.payments import PaymentConfig, PaymentConfigError, PaymentGate
+from lethe_notary.payments import (
+    PaymentConfig,
+    PaymentConfigError,
+    PaymentGate,
+    network_kind,
+)
 from lethe_notary.service import create_app
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
@@ -132,15 +137,15 @@ class _FakeGate:
 
     def charge(self, request):
         if request.headers.get("PAYMENT-SIGNATURE") is None:
-            return False, JSONResponse({"ok": False, "error": {
+            return JSONResponse({"ok": False, "error": {
                 "code": "PAYMENT_REQUIRED", "message": "pay and retry",
                 "retriable": True}}, status_code=402)
         if not self.accept:
-            return False, JSONResponse({"ok": False, "error": {
+            return JSONResponse({"ok": False, "error": {
                 "code": "PAYMENT_INVALID", "message": "declined",
                 "retriable": True}}, status_code=402)
         self.charges += 1
-        return True, None
+        return {}
 
 
 @pytest.fixture
@@ -282,3 +287,40 @@ def test_a_non_evm_network_skips_the_evm_shape_check():
     PaymentConfig.from_env({
         "LETHE_NOTARY_PAY_TO": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
         "LETHE_NOTARY_NETWORK": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"})
+
+
+def test_a_testnet_and_a_mainnet_are_told_apart():
+    """One environment variable separates a notary earning real money from one
+    collecting play money, and the two print nearly the same startup line."""
+    assert network_kind("eip155:84532") == "testnet"
+    assert network_kind("eip155:8453") == "mainnet"
+    assert network_kind("EIP155:8453") == "mainnet"  # ids are not case-sensitive
+
+
+def test_an_unrecognized_network_is_never_guessed_at():
+    """Guessing wrong is unsafe in both directions: calling an unknown network
+    'mainnet' tells an operator their testnet is earning, and calling it
+    'testnet' tells a paying agent that real money is play money."""
+    assert network_kind("eip155:999999") == "unknown"
+    assert network_kind("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1") == "unknown"
+
+
+def test_discovery_says_whether_the_price_is_real_money(paid):
+    """An agent deciding whether to pay should not need its own table of chain
+    ids to find out what it is being quoted in."""
+    client, _ = paid
+    body = client.get("/.well-known/notary").json()
+    assert body["network"] == "eip155:84532"
+    assert body["network_kind"] == "testnet"
+
+
+def test_a_free_notary_quotes_no_network_at_all(notary_signer, log, free_config):
+    """Nothing to disclose when nothing is charged — and a network_kind on a
+    free notary would imply a price that does not exist."""
+    app = create_app(signer=notary_signer, log=log, config=free_config)
+    with TestClient(app) as client:
+        body = client.get("/.well-known/notary").json()
+    assert body["paid"] is False
+    assert body["price"] is None
+    assert body["network"] is None
+    assert body["network_kind"] is None

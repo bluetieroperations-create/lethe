@@ -9,6 +9,51 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **`lethe-notary` declared `x402>=2` but the payment path needs `x402[evm]`
+  and `x402[httpx]`.** A clean install started the service, passed the
+  facilitator preflight, quoted prices — and raised `ImportError` on the first
+  paid request, because `x402.http` and
+  `x402.mechanisms.evm.exact.register` both sit behind extras. Invisible
+  locally: the dev environment had `eth_account`, `eth_utils` and `httpx`
+  pulled in transitively, so every import succeeded there. `eth_utils` missing
+  also silently disabled the EIP-55 checksum on `LETHE_NOTARY_PAY_TO`, the
+  guard that catches a mistyped payee.
+- **`lethe-notary[dev]` declared `httpx2`, which is a real distribution that
+  ships a module named `httpx2`.** Starlette's `TestClient` imports `httpx`. The
+  tests passed only because `httpx` arrived transitively; a clean install of the
+  extra could not import `TestClient` at all.
+- **`PaymentGate.charge` returned `tuple[bool, object | None]`**, and an
+  `object` in the return position meant a type checker could see nothing about
+  its callers — including the three route handlers whose bodies `mypy` was
+  therefore skipping entirely. It now returns either the response to send or
+  the settlement record, so the two outcomes are distinguishable by type.
+  Checking those bodies immediately surfaced six unnarrowed values in
+  `/witness`, where `all(isinstance(v, str) for v in ...)` validates at runtime
+  but narrows nothing.
+
+### Added
+
+- **`notary/` is now covered by CI**: `ruff`, `mypy`, its own test run, and a
+  no-extras install job that imports the whole paid path and quotes a price.
+  It was checked by hand for three releases, which is another way of saying
+  nobody was checking. Dependabot now watches `notary/pyproject.toml` too.
+- **The notary says whether it is charging real money.** `network_kind()`
+  classifies a CAIP-2 id as `testnet`, `mainnet` or `unknown` — never guessing,
+  because assuming either way is unsafe in a different direction. The startup
+  banner and `/.well-known/notary` both report it, so an operator one
+  environment variable away from mainnet, and an agent deciding whether to pay,
+  can both tell.
+- **`notary/tools/pay.py`** — the buyer side of the x402 flow. It exists to be
+  run twice: the second run of the same certificate must report
+  `charged: false` and settle nothing, which is the idempotency guarantee the
+  payment design rests on.
+- The skipped-test guard in CI now covers the notary's suite as well, and fails
+  on a missing report rather than passing over a run that never happened.
+
 ## [0.7.0] — 2026-09-07
 
 ### Added

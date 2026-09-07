@@ -12,6 +12,19 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # notary/ is a second distribution with its own pyproject — starlette, x402,
+  # uvicorn. Without its own entry it is invisible to Dependabot, and x402 is
+  # the dependency where a silent breaking change costs real money.
+  - package-ecosystem: pip
+    directory: /notary
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      notary-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

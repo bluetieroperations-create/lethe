@@ -188,20 +188,45 @@ but a paying client normalizes to CAIP-2, finds no match, and refuses with *no
 payment requirements match registered schemes*. The notary looks healthy and
 nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
 
-### Mainnet needs a different facilitator
+### Going to mainnet
 
-The default `https://x402.org/facilitator` advertises **testnet kinds only**
-(Base Sepolia and friends). That is why the default network is `base-sepolia`
-rather than `base`: a mainnet default would start cleanly and then fail every
-paid request. Point `LETHE_NOTARY_FACILITATOR` at a facilitator that settles
-mainnet before setting `LETHE_NOTARY_NETWORK=eip155:8453`. The preflight will tell you
-if you get this wrong:
+The default is Base Sepolia — `eip155:84532` — and it is a testnet on purpose.
+The default `https://x402.org/facilitator` advertises **testnet kinds only**,
+so a mainnet default would start cleanly and fail every paid request.
+
+Switching is two variables, and they must move together:
+
+```bash
+export LETHE_NOTARY_NETWORK=eip155:8453          # Base mainnet
+export LETHE_NOTARY_FACILITATOR=https://...      # one that settles mainnet
+```
+
+Changing only the network is caught at boot. The preflight asks the
+facilitator what it can settle before the notary serves anything:
 
 ```
 lethe-notary: facilitator https://x402.org/facilitator cannot settle scheme
-'exact' on network 'base' (...). Check .../supported for the kinds it does
-settle, or point LETHE_NOTARY_FACILITATOR at one that covers your network.
+'exact' on network 'eip155:8453' (...). Check .../supported for the kinds it
+does settle, or point LETHE_NOTARY_FACILITATOR at one that covers your network.
 ```
+
+Check the payee **before** the first real payment, not after. `PAY_TO` is
+checked for shape and EIP-55 checksum, which catches placeholders and typos —
+it cannot tell whether you control the address, and nothing later will.
+
+The startup banner says which kind of money is being charged, because the two
+configurations are one environment variable apart and otherwise print the same
+line:
+
+```
+lethe-notary  key_id=…  $0.01 on eip155:84532 [TESTNET - payments are not real money]
+lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
+```
+
+An unrecognized network id says `[unrecognized network - verify before
+serving]` rather than guessing. `/.well-known/notary` reports the same thing as
+`network_kind`, so a paying agent does not need its own table of chain ids to
+know what it is being quoted in.
 
 ## Relationship to `lethe`
 
@@ -210,6 +235,35 @@ nothing in `lethe` imports a payment SDK. Lethe is a self-hosted compliance
 library that runs against the operator's own database, and it must not grow a
 wallet. Keeping the notary a separate package is what makes it optional.
 
+## Buying one, to check it works
+
+`tools/pay.py` is the buyer side of the x402 flow — the same steps a paying
+agent takes, written out.
+
+```bash
+python tools/make_test_certificate.py           # -> certificate.json
+export LETHE_NOTARY_BUYER_KEY=0x...             # funded on the quoted network
+python tools/pay.py --certificate certificate.json --notary http://127.0.0.1:8402
+```
+
+It prints what the notary quoted and whether that price is real money, then
+what the notarization cost.
+
+### Run it twice
+
+The second run of the **same certificate** must report `charged: false`, and
+no second transfer may appear on the explorer. That is the idempotency
+guarantee the payment design rests on: the notary keys on the certificate's
+payload hash, so a retry after a lost response cannot be charged again. A
+repeat is not even quoted a price — the notary recognizes the certificate and
+answers with the original receipt before the payment gate is reached, so the
+caller never signs a second authorization.
+
+This is verified in the test suite end to end, including against a real x402
+client, with the facilitator stubbed. The half no test can cover is the chain
+itself: only running it twice with a funded key proves no second transfer
+settles. Do that once on testnet before pointing anything real at it.
+
 ## Tests
 
 ```bash
@@ -217,6 +271,12 @@ pytest                    # offline
 pytest -m live            # also contacts the real x402 facilitator
 LETHE_TEST_DATABASE_URL=... pytest    # also runs the truncation scenario
 ```
+
+CI runs this suite on every push, alongside `ruff` and `mypy` over
+`lethe_notary/`, and a no-extras install job that imports the whole paid path.
+That last one exists because this package declared bare `x402` for three
+releases: it installs cleanly, starts, and raises `ImportError` on the first
+paid request, because `x402.http` and the EVM scheme live behind extras.
 
 ### Rate limits
 

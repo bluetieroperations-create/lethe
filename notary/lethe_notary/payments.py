@@ -22,7 +22,9 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger("lethe_notary.payments")
@@ -48,6 +50,38 @@ _ALIAS_TO_CAIP2 = {
     "polygon-amoy": "eip155:80002",
 }
 _NON_EVM_PREFIXES = ("solana", "sui", "aptos", "stellar", "algorand", "near", "tron")
+
+# Whether a quoted price is real money. Deliberately two closed lists and an
+# "unknown" answer rather than one list and an assumption: guessing "mainnet"
+# for an unrecognized id would tell an operator their testnet notary is
+# earning, and guessing "testnet" would tell a paying agent that real money is
+# play money. Neither error is safe, so an unlisted network says so.
+_KNOWN_TESTNETS = frozenset({
+    "eip155:84532",     # base sepolia
+    "eip155:11155111",  # ethereum sepolia
+    "eip155:11155420",  # optimism sepolia
+    "eip155:421614",    # arbitrum sepolia
+    "eip155:43113",     # avalanche fuji
+    "eip155:80002",     # polygon amoy
+})
+_KNOWN_MAINNETS = frozenset({
+    "eip155:1",      # ethereum
+    "eip155:8453",   # base
+    "eip155:10",     # optimism
+    "eip155:42161",  # arbitrum
+    "eip155:137",    # polygon
+    "eip155:43114",  # avalanche
+})
+
+
+def network_kind(network: str) -> str:
+    """Classify a CAIP-2 network id: testnet, mainnet, or unknown."""
+    key = network.lower()
+    if key in _KNOWN_TESTNETS:
+        return "testnet"
+    if key in _KNOWN_MAINNETS:
+        return "mainnet"
+    return "unknown"
 
 
 def _looks_evm(network: str) -> bool:
@@ -190,7 +224,8 @@ class PaymentGate:
     this notary has already witnessed) can be answered without taking money.
     """
 
-    def __init__(self, config: PaymentConfig, resource_server=None):
+    def __init__(self, config: PaymentConfig,
+                 resource_server: Any | None = None) -> None:
         self.config = config
         self._server = resource_server
 
@@ -198,18 +233,26 @@ class PaymentGate:
     def enabled(self) -> bool:
         return not self.config.free_mode
 
-    def resource_config(self):
+    def resource_config(self) -> Any:
         """One priced option: the exact scheme, on the configured network."""
         from x402 import ResourceConfig
 
+        # PaymentConfig.check() refuses to start without a payee, so this is
+        # unreachable in a served notary — but `pay_to` is optional for free
+        # mode, and quoting a price to `None` is the one failure that takes a
+        # customer's money and sends it nowhere. Raise rather than let the type
+        # be assumed away.
+        pay_to = self.config.pay_to
+        if pay_to is None:
+            raise PaymentConfigError("no payee is configured; nothing can be charged")
         return ResourceConfig(
             scheme="exact",
-            pay_to=self.config.pay_to,
+            pay_to=pay_to,
             price=self.config.price,
             network=self.config.network,
         )
 
-    def server(self):
+    def server(self) -> Any:
         """Build the x402 resource server on first use.
 
         Constructed lazily, and cached, so that a notary running in free mode
@@ -260,13 +303,17 @@ class PaymentGate:
 
     # -- the protocol ----------------------------------------------------
 
-    def charge(self, request) -> tuple[bool, object | None]:
+    def charge(self, request: Request) -> JSONResponse | dict[str, object]:
         """Verify and settle a payment for this request.
 
-        Returns (paid, detail). When paid is False, detail is the error
-        response to send. When paid is True, detail is the settlement record —
-        transaction hash, network, payer — which the caller echoes so the payer
-        has an on-chain reference and the operator can reconcile. The shape is the protocol's: no
+        Returns EITHER the response to send back — a 402, always — OR the
+        settlement record: transaction hash, network, payer, which the caller
+        echoes so the payer has an on-chain reference and the operator can
+        reconcile. Two return types rather than a (paid, detail) pair, because
+        the pair let `detail` be typed `object`, and an `object` in the return
+        position means a type checker cannot see inside this function's callers
+        at all — which is how three payment-path bugs reached a real chain.
+        The shape is the protocol's: no
         PAYMENT-SIGNATURE means answer 402 with the requirements encoded in
         PAYMENT-REQUIRED, and the client pays and retries. A present signature
         is decoded, matched against those requirements, verified with the
@@ -290,7 +337,7 @@ class PaymentGate:
 
         if not header:
             required = server.create_payment_required_response(requirements)
-            return False, JSONResponse(
+            return JSONResponse(
                 {"ok": False, "error": {
                     "code": "PAYMENT_REQUIRED",
                     "message": "notarization is charged per certificate; pay and retry",
@@ -322,9 +369,9 @@ class PaymentGate:
         except Exception as exc:
             # A malformed payment is the caller's to fix. It must not reach the
             # facilitator, and must not surface as a 500.
-            return False, _payment_error(f"payment could not be read ({exc})")
+            return _payment_error(f"payment could not be read ({exc})")
         if matched is None:
-            return False, _payment_error(
+            return _payment_error(
                 "payment does not match this resource's requirements")
 
         try:
@@ -333,10 +380,10 @@ class PaymentGate:
             # Verification moves no money, so a facilitator that is down or
             # slow costs the caller nothing but a retry. Never a 500: this is
             # an upstream outage, not a fault in the request.
-            return False, _payment_error(
+            return _payment_error(
                 f"could not reach the facilitator to verify the payment ({exc})")
         if not getattr(verified, "is_valid", False):
-            return False, _payment_error(
+            return _payment_error(
                 getattr(verified, "invalid_reason", None) or "payment did not verify")
 
         try:
@@ -361,8 +408,8 @@ class PaymentGate:
                 "payment was verified. The money may or may not have moved. "
                 "Reconcile against the chain."
             )
-            return True, {"settlement_confirmed": False, "error": str(exc),
-                          "transaction": None, "network": None, "payer": None}
+            return {"settlement_confirmed": False, "error": str(exc),
+                    "transaction": None, "network": None, "payer": None}
         # The settle response is the only thing that says money actually moved.
         # Discarding it -- which this code did until a real payment went
         # through and the 200 could not be distinguished from a 200 over a
@@ -373,8 +420,8 @@ class PaymentGate:
             reason = (getattr(settled, "error_reason", None)
                       or getattr(settled, "error_message", None)
                       or "settlement did not succeed")
-            return False, _payment_error(f"payment did not settle ({reason})")
-        return True, {
+            return _payment_error(f"payment did not settle ({reason})")
+        return {
             "settlement_confirmed": True,
             # Handed back so the payer has an on-chain reference for what they
             # bought, and the operator can reconcile without trusting this
@@ -385,7 +432,7 @@ class PaymentGate:
         }
 
 
-def _payment_error(message: str):
+def _payment_error(message: str) -> JSONResponse:
     return JSONResponse(
         {"ok": False, "error": {"code": "PAYMENT_INVALID", "message": message,
                                 "retriable": True}},

@@ -7,7 +7,7 @@ import click
 
 from lethe.signing import Signer, key_id_for
 
-from .payments import PaymentConfig, PaymentConfigError
+from .payments import PaymentConfig, PaymentConfigError, network_kind
 from .store import WitnessLog
 
 
@@ -98,7 +98,20 @@ def serve(key_file: str, log_path: str, host: str, port: int,
         app.state.notary.gate.preflight()
     except PaymentConfigError as e:
         raise SystemExit(f"lethe-notary: {e}") from None
-    mode = "FREE (not charging)" if config.free_mode else f"{config.price} on {config.network}"
+    # Say plainly whether the money is real. A notary on Base Sepolia and one
+    # on Base mainnet are one environment variable apart and print an almost
+    # identical line; an operator who mixes them up either gives the service
+    # away or believes testnet dollars are revenue.
+    if config.free_mode:
+        mode = "FREE (not charging)"
+    else:
+        kind = network_kind(config.network)
+        label = {
+            "testnet": " [TESTNET - payments are not real money]",
+            "mainnet": " [MAINNET - real money]",
+            "unknown": " [unrecognized network - verify before serving]",
+        }[kind]
+        mode = f"{config.price} on {config.network}{label}"
     print(f"lethe-notary  key_id={key_id_for(signer.public_key_b64())}  {mode}",
           file=sys.stderr)
     uvicorn.run(app, host=host, port=port)

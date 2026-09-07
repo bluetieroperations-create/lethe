@@ -23,13 +23,22 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install -e ".[dev]"
+      # Installed so mypy checks notary/ against the real starlette and x402
+      # types. Without it, `ignore_missing_imports` turns every one of them
+      # into Any and the job would agree with anything.
+      - name: Install notary
+        run: python -m pip install -e "./notary[dev]"
       # Lint only, not `ruff format --check`: adopting the formatter would
       # rewrite most of the codebase in one go and bury real changes in
       # reflow. Worth doing deliberately, not as a side effect of adding CI.
+      # notary/ is a separate distribution, but it is in this repo and it
+      # handles money. It was linted and typechecked by hand for three
+      # releases, which is another way of saying nobody was checking: three
+      # "ruff clean" claims went unchallenged because no job disagreed.
       - name: Ruff
-        run: python -m ruff check lethe tests
+        run: python -m ruff check lethe tests notary
       - name: Mypy
-        run: python -m mypy lethe
+        run: python -m mypy lethe notary/lethe_notary
 
   # Exactly what `pip install lethe-delete` gives a user: no extras, no dev
   # dependencies. v0.3.0 shipped with the documented verification API
@@ -113,6 +122,77 @@ jobs:
           lethe verify --help > /dev/null
           echo "CLI ok"
 
+  # The notary's own base install. Same lesson as base-install above, one
+  # layer down: `pip install lethe-notary` declared bare x402, which installs
+  # cleanly, starts the service, and raises ImportError on the FIRST PAID
+  # REQUEST — because x402.http and x402.mechanisms.evm.exact.register both
+  # live behind extras. No unit test could catch it: the dev environment had
+  # eth_account and httpx pulled in transitively, so the imports always
+  # succeeded there.
+  notary-install:
+    name: Notary install (no dev extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install with no extras
+        run: |
+          python -m pip install .
+          python -m pip install ./notary
+
+      - name: The paid path must import
+        # From outside the checkout, so the INSTALLED distributions are what
+        # gets imported rather than the source tree.
+        run: |
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import importlib
+
+          # Every module the notary reaches for while taking a payment. These
+          # are imported lazily inside PaymentGate, so nothing surfaces a
+          # missing extra until money is on the line.
+          for name in [
+              "lethe_notary.service",
+              "lethe_notary.payments",
+              "lethe_notary.cli",
+              "x402",
+              "x402.http",
+              "x402.mechanisms.evm.exact.register",
+              "eth_utils",  # the EIP-55 check silently no-ops without it
+          ]:
+              importlib.import_module(name)
+              print("ok", name)
+          PY
+
+      - name: A price must be quotable
+        run: |
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          from lethe_notary.payments import PaymentConfig, PaymentGate
+
+          config = PaymentConfig(
+              pay_to="0x000000000000000000000000000000000000dead",
+              price="$0.01", network="eip155:84532",
+              facilitator_url="https://x402.org/facilitator",
+          )
+          # No network contacted: building the requirement object is pure
+          # local work. The import step above is what proves the extras are
+          # present; this proves the config the notary quotes from still
+          # constructs against whatever x402 version resolved.
+          print(PaymentGate(config).resource_config())
+          PY
+
+      - name: CLI must run
+        run: |
+          cd "$RUNNER_TEMP"
+          lethe-notary --help > /dev/null
+          lethe-notary serve --help > /dev/null
+          echo "notary CLI ok"
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -147,10 +227,25 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
 
+      # Installed after the root package so `lethe-delete>=0.7` resolves to the
+      # editable checkout rather than being fetched from an index that has
+      # never had it.
+      - name: Install notary
+        run: python -m pip install -e "./notary[dev]"
+
       - name: Test
         env:
           LETHE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lethe_test
         run: python -m pytest -q -ra --junitxml=junit.xml
+
+      # Its own run, not a wider testpaths: notary depends on starlette and
+      # x402, which lethe deliberately does not, and a bare `pytest` at the
+      # root must stay runnable without them. rootdir resolves to notary/,
+      # so notary/pytest.ini deselects the live-facilitator tests.
+      - name: Test notary
+        env:
+          LETHE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lethe_test
+        run: python -m pytest notary/tests -q -ra --junitxml=notary-junit.xml
 
       # A green check that silently skipped the DB half of the suite would
       # overstate what CI proved. Every test must actually run.
@@ -158,10 +253,23 @@ jobs:
         if: always()
         run: |
           python - <<'PY'
-          import sys, xml.etree.ElementTree as ET
-          suite = ET.parse("junit.xml").getroot().find("testsuite")
-          skipped, tests = int(suite.get("skipped")), int(suite.get("tests"))
-          print(f"{tests} tests, {skipped} skipped")
-          if skipped:
-              sys.exit(f"{skipped} test(s) skipped — CI must exercise the full suite.")
+          import pathlib, sys, xml.etree.ElementTree as ET
+
+          failed = False
+          for name in ("junit.xml", "notary-junit.xml"):
+              path = pathlib.Path(name)
+              if not path.exists():
+                  # A missing report means that pytest run never happened —
+                  # which this guard must fail on, not skip over.
+                  print(f"{name}: MISSING")
+                  failed = True
+                  continue
+              suite = ET.parse(path).getroot().find("testsuite")
+              skipped, tests = int(suite.get("skipped")), int(suite.get("tests"))
+              print(f"{name}: {tests} tests, {skipped} skipped")
+              if skipped:
+                  print(f"  {skipped} test(s) skipped — CI must exercise the full suite.")
+                  failed = True
+          if failed:
+              sys.exit(1)
           PY
