@@ -4,14 +4,15 @@ import json
 
 import pytest
 from conftest import make_cert
-from lethe_notary.payments import PaymentConfig, PaymentConfigError, PaymentGate
-
-# A well-formed EVM address. The burn address, so a stray real payment would
-# go nowhere rather than to someone.
-PAYEE = "0x000000000000000000000000000000000000dEaD"
-from lethe_notary.service import create_app
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
+
+from lethe_notary.payments import PaymentConfig, PaymentConfigError, PaymentGate
+from lethe_notary.service import create_app
+
+# A well-formed EVM address. The burn address, so a stray real payment would go
+# nowhere rather than to someone.
+PAYEE = "0x000000000000000000000000000000000000dEaD"
 
 
 def test_a_paid_notary_refuses_to_start_without_somewhere_to_be_paid():
