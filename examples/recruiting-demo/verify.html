@@ -144,7 +144,7 @@
   </div>
 
   <div class="verdict">
-    <div class="banner">
+    <div class="banner" aria-live="polite">
       <span class="word idle" id="word">NOT CHECKED</span>
       <span class="why" id="why">Paste a certificate and a public key, then press Verify.</span>
     </div>
@@ -262,10 +262,24 @@ async function verify(certText, pinnedKeyText) {
   } catch (e) {
     return { fatal: "That is not valid JSON: " + e.message, results };
   }
+  if (env === null || typeof env !== "object" || Array.isArray(env)) {
+    return { fatal: "A certificate must be a JSON object with payload, payload_hash, signature and public_key.", results };
+  }
   for (const f of ["payload", "payload_hash", "signature", "public_key"]) {
     if (env[f] === undefined) {
       return { fatal: "The certificate is missing its “" + f + "” field.", results };
     }
+  }
+  // Types are checked before use, not assumed. A hostile or simply broken
+  // document must produce a readable verdict rather than an exception the
+  // click handler renders as "unexpected error".
+  for (const f of ["payload_hash", "signature", "public_key"]) {
+    if (typeof env[f] !== "string") {
+      return { fatal: "The certificate's “" + f + "” must be a string.", results };
+    }
+  }
+  if (env.payload === null || typeof env.payload !== "object" || Array.isArray(env.payload)) {
+    return { fatal: "The certificate's payload must be a JSON object.", results };
   }
   if (!pinnedKeyText.trim()) {
     return { fatal: "Paste the operator's published public key. Without it the check proves nothing.", results };
@@ -276,6 +290,17 @@ async function verify(certText, pinnedKeyText) {
   catch { return { fatal: "The certificate's public_key is not valid base64.", results }; }
   try { pinned = b64ToBytes(pinnedKeyText); }
   catch { return { fatal: "The public key you pasted is not valid base64.", results }; }
+
+  // An Ed25519 public key is exactly 32 bytes. Checking it here means a
+  // truncated or wrong-algorithm key is named as such, instead of surfacing
+  // later as "this browser cannot check Ed25519" — which would blame the
+  // browser for the operator's typo.
+  if (embedded.length !== 32) {
+    return { fatal: "The certificate's public_key is " + embedded.length + " bytes; an Ed25519 key is 32.", results };
+  }
+  if (pinned.length !== 32) {
+    return { fatal: "The key you pasted is " + pinned.length + " bytes; an Ed25519 key is 32.", results };
+  }
 
   // 1. pinning
   if (!sameBytes(embedded, pinned)) {
@@ -315,6 +340,10 @@ async function verify(certText, pinnedKeyText) {
   let sig;
   try { sig = b64ToBytes(env.signature); }
   catch { return { fatal: "The signature is not valid base64.", results }; }
+  if (sig.length !== 64) {
+    fail("signature", "The signature is " + sig.length + " bytes; an Ed25519 signature is 64.");
+    return { results };
+  }
 
   let key;
   try {
@@ -335,11 +364,18 @@ async function verify(certText, pinnedKeyText) {
 
 const $ = id => document.getElementById(id);
 
+/* Every string below is rendered through innerHTML, and several of them come
+   from the certificate — which is, by the nature of this page, a document
+   handed over by someone you have no reason to trust. A key_id carrying markup
+   would otherwise execute here. Escape at the boundary, without exception. */
+const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = value => String(value).replace(/[&<>"']/g, c => HTML_ESCAPES[c]);
+
 function renderIdle() {
   $("checks").innerHTML = CHECKS.map(([id, name, note]) => `
     <li>
       <span class="chip idle">—</span>
-      <span><span class="name">${name}</span><br><span class="note">${note}</span></span>
+      <span><span class="name">${esc(name)}</span><br><span class="note">${esc(note)}</span></span>
     </li>`).join("");
   $("facts").hidden = true;
 }
@@ -363,8 +399,8 @@ function render(outcome) {
     const mark = r === undefined ? "—" : r.ok ? "pass" : "fail";
     const note = r === undefined ? "Not reached." : (r.note || blurb);
     return `<li>
-      <span class="chip ${cls}">${mark}</span>
-      <span><span class="name">${name}</span><br><span class="note">${note}</span></span>
+      <span class="chip ${cls}">${esc(mark)}</span>
+      <span><span class="name">${esc(name)}</span><br><span class="note">${esc(note)}</span></span>
     </li>`;
   }).join("");
 
@@ -381,7 +417,7 @@ function render(outcome) {
       ["audit head", p.audit_head || "none"],
     ].filter(([, v]) => v !== undefined && v !== "");
     facts.innerHTML = rows.map(([k, v]) =>
-      `<div><span class="k">${k}</span><span class="v">${String(v)}</span></div>`).join("");
+      `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("");
     facts.hidden = false;
   } else {
     facts.hidden = true;
