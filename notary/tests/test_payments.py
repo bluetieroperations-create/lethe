@@ -4,11 +4,10 @@ import json
 
 import pytest
 from conftest import make_cert
-from starlette.responses import JSONResponse
-from starlette.testclient import TestClient
-
 from lethe_notary.payments import PaymentConfig, PaymentConfigError, PaymentGate
 from lethe_notary.service import create_app
+from starlette.responses import JSONResponse
+from starlette.testclient import TestClient
 
 # A well-formed EVM address. The burn address, so a stray real payment would go
 # nowhere rather than to someone.
