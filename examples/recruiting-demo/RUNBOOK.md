@@ -9,7 +9,7 @@ cd examples/recruiting-demo
 export DEMO_DATABASE_URL='<a throwaway Postgres + pgvector — Neon works>'
 python setup.py                 # seeds candidates + a signing key; prints the public key
 ```
-Open the verifier page (lethe-marketing/site/verify.html) in a tab. Keep the
+Open the verifier page (`verify.html`, in this directory — double-click it) in a tab. Keep the
 printed **public key** handy. Do a dry run so the live one is smooth.
 
 ---

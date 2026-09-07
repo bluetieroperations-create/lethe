@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify a Lethe deletion certificate</title>
+<style>
+  :root {
+    --paper:  #FBFBFC;
+    --raised: #F2F3F6;
+    --ink:    #14181F;
+    --slate:  #59637A;
+    --rule:   #DCE0E7;
+    --stamp:  #1F3FBF;
+    --pass:   #1F6B4A;
+    --fail:   #A33A2A;
+    --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0E1116; --raised: #161B22; --ink: #E7EBF0; --slate: #98A3B3;
+      --rule: #232A34; --stamp: #8AA0FF; --pass: #5FBF92; --fail: #DE7B67;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0E1116; --raised: #161B22; --ink: #E7EBF0; --slate: #98A3B3;
+    --rule: #232A34; --stamp: #8AA0FF; --pass: #5FBF92; --fail: #DE7B67;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 58rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
+          display: flex; flex-direction: column; gap: 1.75rem; }
+
+  header { display: flex; flex-direction: column; gap: 0.5rem;
+           border-bottom: 1px solid var(--rule); padding-bottom: 1.25rem; }
+  .kicker { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
+            text-transform: uppercase; color: var(--slate); }
+  h1 { font-size: 1.6rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--slate); max-width: 62ch; font-size: 0.95rem; }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+  @media (min-width: 52rem) { .grid { grid-template-columns: 1fr 1fr; } }
+
+  label { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+  .lab { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em;
+         text-transform: uppercase; color: var(--slate); }
+  textarea {
+    font-family: var(--mono); font-size: 0.8rem; line-height: 1.5;
+    background: var(--raised); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 0; padding: 0.75rem;
+    resize: vertical; width: 100%;
+  }
+  #cert { min-height: 15rem; }
+  #pubkey { min-height: 4rem; }
+  textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--stamp); outline-offset: 2px;
+  }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+  button {
+    font-family: var(--sans); font-size: 0.92rem; font-weight: 600;
+    padding: 0.6rem 1.25rem; border: 1px solid var(--stamp);
+    background: var(--stamp); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--stamp); }
+  button:hover { opacity: 0.88; }
+
+  /* verdict */
+  .verdict { border: 1px solid var(--rule); background: var(--raised); }
+  .verdict .banner {
+    padding: 1.25rem 1.35rem; display: flex; flex-wrap: wrap;
+    gap: 0.4rem 1rem; align-items: baseline; border-bottom: 1px solid var(--rule);
+  }
+  .verdict .word { font-family: var(--mono); font-size: 1.9rem; font-weight: 500;
+                   letter-spacing: 0.04em; }
+  .verdict .word.idle { color: var(--slate); }
+  .verdict .word.ok   { color: var(--pass); }
+  .verdict .word.bad  { color: var(--fail); }
+  .verdict .why { color: var(--slate); font-size: 0.95rem; }
+
+  ol.checks { list-style: none; margin: 0; padding: 0; }
+  ol.checks li {
+    display: grid; grid-template-columns: 4.5rem 1fr; gap: 0.9rem;
+    padding: 0.8rem 1.35rem; border-top: 1px solid var(--rule);
+  }
+  ol.checks li:first-child { border-top: 0; }
+  .chip {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 0.15rem 0.4rem; text-align: center;
+    border: 1px solid currentColor; align-self: start; margin-top: 0.15rem;
+  }
+  .chip.idle { color: var(--slate); }
+  .chip.ok   { color: var(--pass); }
+  .chip.bad  { color: var(--fail); }
+  .checks .name { font-weight: 600; font-size: 0.95rem; }
+  .checks .note { color: var(--slate); font-size: 0.88rem; word-break: break-word; }
+
+  .facts { border-top: 1px solid var(--rule); padding: 0.9rem 1.35rem;
+           display: flex; flex-direction: column; gap: 0.35rem; }
+  .facts div { display: flex; gap: 0.75rem; flex-wrap: wrap; font-size: 0.85rem; }
+  .facts .k { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em;
+              text-transform: uppercase; color: var(--slate); min-width: 9rem; }
+  .facts .v { font-family: var(--mono); word-break: break-all; }
+
+  footer { color: var(--slate); font-size: 0.85rem; max-width: 68ch;
+           border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+  code { font-family: var(--mono); font-size: 0.92em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">Lethe &middot; offline certificate verifier</div>
+    <h1>Verify a deletion certificate</h1>
+    <p>Paste a certificate and the operator's <strong>published</strong> public key. Everything runs in this page — nothing is uploaded. A certificate that vouches for itself proves nothing, so the key must come from the operator out of band, not from the certificate.</p>
+  </header>
+
+  <div class="grid">
+    <label>
+      <span class="lab">Certificate (cert.json)</span>
+      <textarea id="cert" spellcheck="false" placeholder='{ "payload": { ... }, "payload_hash": "...", "signature": "...", "public_key": "..." }'></textarea>
+    </label>
+    <label>
+      <span class="lab">Operator's published public key (base64)</span>
+      <textarea id="pubkey" spellcheck="false" placeholder="dAIcab/IumLen2IR1jnYqkoTWCPgCH+cV6UkpHRFPHY="></textarea>
+    </label>
+  </div>
+
+  <div class="actions">
+    <button id="go">Verify</button>
+    <button id="sample" class="ghost" type="button">Load example</button>
+    <button id="clear" class="ghost" type="button">Clear</button>
+  </div>
+
+  <div class="verdict">
+    <div class="banner">
+      <span class="word idle" id="word">NOT CHECKED</span>
+      <span class="why" id="why">Paste a certificate and a public key, then press Verify.</span>
+    </div>
+    <ol class="checks" id="checks"></ol>
+    <div class="facts" id="facts" hidden></div>
+  </div>
+
+  <footer>
+    All four checks must pass. The signature alone is not enough: a certificate carries the key that signed it, so checking it against itself only proves internal consistency. Pinning the operator's published key is what makes the result mean anything. This page requires a browser with Ed25519 in the Web Crypto API (Chrome 137+, Firefox 129+, Safari 17+).
+  </footer>
+
+</div>
+
+<script>
+"use strict";
+
+/* --------------------------------------------------------------------------
+   Canonical JSON — must reproduce Lethe's signing bytes exactly.
+
+   Lethe signs  json.dumps(payload, sort_keys=True, separators=(",", ":"))
+   with CPython's default ensure_ascii=True. That last part matters: the
+   certificate's claim text contains an em dash, which Python emits as the
+   escape — rather than the literal character. JSON.stringify would emit
+   the character, hash to something else, and report INVALID on a perfectly
+   good certificate. So the escaping is reimplemented here rather than
+   delegated.
+   -------------------------------------------------------------------------- */
+
+const SHORT_ESCAPES = { 8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r" };
+
+function quoteString(s) {
+  let out = '"';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    const c = s.charCodeAt(i);
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (SHORT_ESCAPES[c] !== undefined) out += SHORT_ESCAPES[c];
+    // Python's ensure_ascii escapes everything outside printable ASCII,
+    // 0x20-0x7e, in lowercase \uXXXX form. Astral characters arrive here as
+    // UTF-16 surrogate pairs and are emitted as two escapes, same as Python.
+    else if (c < 0x20 || c > 0x7e) out += "\\u" + c.toString(16).padStart(4, "0");
+    else out += ch;
+  }
+  return out + '"';
+}
+
+function canonical(value) {
+  if (value === null) return "null";
+  const t = typeof value;
+  if (t === "boolean") return value ? "true" : "false";
+  if (t === "number") {
+    if (!Number.isFinite(value)) throw new Error("non-finite number in payload");
+    return String(value);
+  }
+  if (t === "string") return quoteString(value);
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  if (t === "object") {
+    // Python sorts keys by code point; JS sorts by UTF-16 code unit. These
+    // agree for every key Lethe emits (all ASCII identifiers).
+    const keys = Object.keys(value).sort();
+    return "{" + keys.map(k => quoteString(k) + ":" + canonical(value[k])).join(",") + "}";
+  }
+  throw new Error("value of type " + t + " cannot appear in a signed payload");
+}
+
+/* ---------------------------------- utils --------------------------------- */
+
+function b64ToBytes(s) {
+  const t = String(s).trim();
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(t) || t.length % 4 !== 0) {
+    throw new Error("not valid base64");
+  }
+  const bin = atob(t);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function toHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(bytes) {
+  return toHex(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/* ------------------------------- verification ------------------------------ */
+
+const CHECKS = [
+  ["pinning",   "Signed by the pinned key",
+                "The key embedded in the certificate is the operator's published key."],
+  ["key_id",    "key_id matches the key",
+                "The key epoch the certificate names is the key that actually signed it."],
+  ["hash",      "Payload is unaltered",
+                "SHA-256 of the canonical payload matches the recorded payload_hash."],
+  ["signature", "Signature is genuine",
+                "Ed25519 signature verifies over the canonical payload bytes."],
+];
+
+async function verify(certText, pinnedKeyText) {
+  const results = {};
+  const fail = (id, note) => { results[id] = { ok: false, note }; return results; };
+
+  let env;
+  try {
+    env = JSON.parse(certText);
+  } catch (e) {
+    return { fatal: "That is not valid JSON: " + e.message, results };
+  }
+  for (const f of ["payload", "payload_hash", "signature", "public_key"]) {
+    if (env[f] === undefined) {
+      return { fatal: "The certificate is missing its “" + f + "” field.", results };
+    }
+  }
+  if (!pinnedKeyText.trim()) {
+    return { fatal: "Paste the operator's published public key. Without it the check proves nothing.", results };
+  }
+
+  let embedded, pinned;
+  try { embedded = b64ToBytes(env.public_key); }
+  catch { return { fatal: "The certificate's public_key is not valid base64.", results }; }
+  try { pinned = b64ToBytes(pinnedKeyText); }
+  catch { return { fatal: "The public key you pasted is not valid base64.", results }; }
+
+  // 1. pinning
+  if (!sameBytes(embedded, pinned)) {
+    fail("pinning", "This certificate was signed by a different key than the one you pinned. It may be genuine — but not from this operator.");
+    return { results };
+  }
+  results.pinning = { ok: true, note: "" };
+
+  // 2. key_id, when the schema carries one (v3+; v1 and v2 legitimately do not)
+  const declared = env.payload && env.payload.key_id;
+  if (declared === undefined || declared === null) {
+    results.key_id = { ok: true, note: "Not present — this is a pre-v3 certificate, which is expected." };
+  } else {
+    const expected = "ed25519:" + (await sha256Hex(embedded)).slice(0, 32);
+    if (declared !== expected) {
+      fail("key_id", "The certificate names key " + declared + " but its embedded key derives " + expected + ".");
+      return { results };
+    }
+    results.key_id = { ok: true, note: declared };
+  }
+
+  // 3. payload hash
+  let bytes;
+  try {
+    bytes = new TextEncoder().encode(canonical(env.payload));
+  } catch (e) {
+    return { fatal: "The payload cannot be canonicalised: " + e.message, results };
+  }
+  const actual = await sha256Hex(bytes);
+  if (actual !== env.payload_hash) {
+    fail("hash", "The payload has been altered since it was signed. Recorded " + env.payload_hash.slice(0, 16) + "…, computed " + actual.slice(0, 16) + "…");
+    return { results };
+  }
+  results.hash = { ok: true, note: "" };
+
+  // 4. signature
+  let sig;
+  try { sig = b64ToBytes(env.signature); }
+  catch { return { fatal: "The signature is not valid base64.", results }; }
+
+  let key;
+  try {
+    key = await crypto.subtle.importKey("raw", embedded, { name: "Ed25519" }, false, ["verify"]);
+  } catch {
+    return { fatal: "This browser cannot check Ed25519 signatures. Use Chrome 137+, Firefox 129+, or Safari 17+.", results };
+  }
+  const good = await crypto.subtle.verify({ name: "Ed25519" }, key, sig, bytes);
+  if (!good) {
+    fail("signature", "The signature does not verify against this payload and key.");
+    return { results };
+  }
+  results.signature = { ok: true, note: "" };
+  return { results, env };
+}
+
+/* ---------------------------------- render -------------------------------- */
+
+const $ = id => document.getElementById(id);
+
+function renderIdle() {
+  $("checks").innerHTML = CHECKS.map(([id, name, note]) => `
+    <li>
+      <span class="chip idle">—</span>
+      <span><span class="name">${name}</span><br><span class="note">${note}</span></span>
+    </li>`).join("");
+  $("facts").hidden = true;
+}
+
+function render(outcome) {
+  const { results, fatal, env } = outcome;
+  const ran = CHECKS.filter(([id]) => results[id] !== undefined);
+  const allOk = !fatal && ran.length === CHECKS.length && ran.every(([id]) => results[id].ok);
+
+  $("word").className = "word " + (fatal ? "bad" : allOk ? "ok" : "bad");
+  $("word").textContent = fatal ? "UNREADABLE" : allOk ? "VALID" : "INVALID";
+  $("why").textContent = fatal
+    ? fatal
+    : allOk
+      ? "Signed by the pinned key, over exactly this payload."
+      : "One check failed. The certificate does not prove what it claims.";
+
+  $("checks").innerHTML = CHECKS.map(([id, name, blurb]) => {
+    const r = results[id];
+    const cls = r === undefined ? "idle" : r.ok ? "ok" : "bad";
+    const mark = r === undefined ? "—" : r.ok ? "pass" : "fail";
+    const note = r === undefined ? "Not reached." : (r.note || blurb);
+    return `<li>
+      <span class="chip ${cls}">${mark}</span>
+      <span><span class="name">${name}</span><br><span class="note">${note}</span></span>
+    </li>`;
+  }).join("");
+
+  const facts = $("facts");
+  if (allOk && env && env.payload) {
+    const p = env.payload;
+    const rows = [
+      ["schema", p.schema],
+      ["issued at", p.issued_at],
+      ["valid until", p.valid_until === null ? "unbounded — scoped to issue time" : p.valid_until],
+      ["records deleted", String(p.records_deleted)],
+      ["all verified", String(p.all_verified)],
+      ["declared scope", Array.isArray(p.declared_scope) ? p.declared_scope.join(", ") : ""],
+      ["audit head", p.audit_head || "none"],
+    ].filter(([, v]) => v !== undefined && v !== "");
+    facts.innerHTML = rows.map(([k, v]) =>
+      `<div><span class="k">${k}</span><span class="v">${String(v)}</span></div>`).join("");
+    facts.hidden = false;
+  } else {
+    facts.hidden = true;
+  }
+}
+
+/* --------------------------------- wiring --------------------------------- */
+
+$("go").addEventListener("click", async () => {
+  try {
+    render(await verify($("cert").value, $("pubkey").value));
+  } catch (e) {
+    render({ fatal: "Unexpected error: " + e.message, results: {} });
+  }
+});
+
+$("clear").addEventListener("click", () => {
+  $("cert").value = ""; $("pubkey").value = "";
+  $("word").className = "word idle";
+  $("word").textContent = "NOT CHECKED";
+  $("why").textContent = "Paste a certificate and a public key, then press Verify.";
+  renderIdle();
+});
+
+$("sample").addEventListener("click", () => {
+  $("cert").value = JSON.stringify(EXAMPLE.cert, null, 2);
+  $("pubkey").value = EXAMPLE.public_key;
+});
+
+// A synthetic certificate, signed by a throwaway key, so this page can be
+// checked on its own before a demo. It is not evidence of anything.
+const EXAMPLE = {
+  "cert": {
+    "payload": {
+      "schema": "lethe.cert/3",
+      "key_id": "ed25519:37136b1fe37603dde5377530fcf84dea",
+      "request_id": "demo-run-01",
+      "subject_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "issued_at": "2026-09-07T12:00:00+00:00",
+      "valid_until": "2026-12-07T12:00:00+00:00",
+      "lethe_version": "0.7.1",
+      "claim": "Deleted across the listed retrieval layers and verified absent by re-query at issue time against the configured endpoint, recording the residual match count for each layer. Scope is limited to the declared connectors (declared_scope); a store not listed there was not checked. The absence is asserted as of issued_at and is not asserted beyond valid_until (when set) \u2014 re-verify after that time, as the underlying index can change (possible only where reverifiable is true; otherwise the issuer did not retain the record identifiers a re-query needs). Not a guarantee of erasure from backups, model weights, or systems outside Lethe's configured connectors, nor a guarantee against read replicas, caches, or asynchronous propagation (e.g. eventually-consistent stores such as Pinecone). This certificate is self-issued: issued_at is the issuer's own clock, and the signature proves only that the holder of key_id produced it. Where audit_head is set, the certificate is bound to that position in the issuer's tamper-evident audit chain. Where timestamp is null, no external timestamping authority has corroborated the issue time.",
+      "declared_scope": [
+        "pgvector"
+      ],
+      "audit_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "timestamp": null,
+      "reverifiable": false,
+      "all_verified": true,
+      "layers_found": 1,
+      "records_deleted": 1,
+      "all_layers_handled": true,
+      "layers": [
+        {
+          "store": "pgvector",
+          "namespace": "candidates",
+          "deleted_count": 1,
+          "verified_absent": true,
+          "requested_count": 1,
+          "handled": true,
+          "erased": true,
+          "residual_count": null,
+          "verify_method": null,
+          "index_version": null
+        }
+      ]
+    },
+    "payload_hash": "9d93746150d7c1d9a70fd886ea77df6d3f0b2dd1eb7226393c6aeadc92a794d2",
+    "signature": "2q2ISi/mNCFt4J5CTzQJKSBTIb/3VDE5vuWD59FG4gQjG81MamiIEEjXrFxBsCNCsNyb85cgiXoVGxqsluxXAg==",
+    "public_key": "dAIcab/IumLen2IR1jnYqkoTWCPgCH+cV6UkpHRFPHY="
+  },
+  "public_key": "dAIcab/IumLen2IR1jnYqkoTWCPgCH+cV6UkpHRFPHY="
+};
+
+renderIdle();
+</script>
+</body>
+</html>
