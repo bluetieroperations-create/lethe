@@ -18,11 +18,14 @@ read back your own evidence at the moment you need it would make the evidence
 worthless.
 """
 
+import logging
 import os
 import re
 from dataclasses import dataclass
 
 from starlette.responses import JSONResponse
+
+logger = logging.getLogger("lethe_notary.payments")
 
 
 class PaymentConfigError(Exception):
@@ -324,12 +327,42 @@ class PaymentGate:
             return False, _payment_error(
                 "payment does not match this resource's requirements")
 
-        verified = server.verify_payment(payload, matched)
+        try:
+            verified = server.verify_payment(payload, matched)
+        except Exception as exc:
+            # Verification moves no money, so a facilitator that is down or
+            # slow costs the caller nothing but a retry. Never a 500: this is
+            # an upstream outage, not a fault in the request.
+            return False, _payment_error(
+                f"could not reach the facilitator to verify the payment ({exc})")
         if not getattr(verified, "is_valid", False):
             return False, _payment_error(
                 getattr(verified, "invalid_reason", None) or "payment did not verify")
 
-        settled = server.settle_payment(payload, matched)
+        try:
+            settled = server.settle_payment(payload, matched)
+        except Exception as exc:
+            # SETTLEMENT STATUS IS NOW UNKNOWN. The facilitator may have moved
+            # the money and lost the response. Refusing here would repeat the
+            # pay-and-get-nothing failure through a different door, and worse:
+            # the caller would retry with a FRESH authorization and could be
+            # charged twice.
+            #
+            # So treat it as paid. The asymmetry decides it — issuing a receipt
+            # that was not paid for costs the operator one receipt; refusing one
+            # that was paid for costs the customer their money and their
+            # evidence. Recording it also makes a retry free, because
+            # idempotency keys on the certificate hash, which closes the
+            # double-charge.
+            #
+            # The operator has to reconcile this by hand, so say so loudly.
+            logger.exception(
+                "SETTLEMENT STATUS UNKNOWN: the facilitator call raised after the "
+                "payment was verified. The money may or may not have moved. "
+                "Reconcile against the chain."
+            )
+            return True, {"settlement_confirmed": False, "error": str(exc),
+                          "transaction": None, "network": None, "payer": None}
         # The settle response is the only thing that says money actually moved.
         # Discarding it -- which this code did until a real payment went
         # through and the 200 could not be distinguished from a 200 over a
@@ -342,6 +375,7 @@ class PaymentGate:
                       or "settlement did not succeed")
             return False, _payment_error(f"payment did not settle ({reason})")
         return True, {
+            "settlement_confirmed": True,
             # Handed back so the payer has an on-chain reference for what they
             # bought, and the operator can reconcile without trusting this
             # service's own word for it.

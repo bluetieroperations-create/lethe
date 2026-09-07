@@ -41,14 +41,21 @@ def keygen(out: str) -> None:
 @click.option("--log", "log_path", envvar="LETHE_NOTARY_LOG",
               default="notary-witness.db", show_default=True)
 @click.option("--out", required=True, type=click.Path(dir_okay=False))
-def backup(log_path: str, out: str) -> None:
+@click.option("--overwrite", is_flag=True,
+              help="Replace an existing file. Off by default: pointing a backup "
+                   "at yesterday's file overwrites it with today's, and if "
+                   "today's log is empty the good copy is gone.")
+def backup(log_path: str, out: str, overwrite: bool) -> None:
     """Snapshot the witness log while the notary keeps serving.
 
     One SQLite file holding the only off-site copy of every customer's audit
     heads is a single point of failure. Run this on a schedule and ship the
     output somewhere else.
     """
-    rows = WitnessLog(log_path).backup_to(out)
+    try:
+        rows = WitnessLog(log_path).backup_to(out, overwrite=overwrite)
+    except FileExistsError as e:
+        raise SystemExit(f"lethe-notary: {e}") from None
     click.echo(f"wrote {out} ({rows} witnessed records)")
 
 

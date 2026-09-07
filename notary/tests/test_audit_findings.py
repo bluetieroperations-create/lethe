@@ -388,3 +388,27 @@ def test_the_log_is_crash_durable(client):
     conn = client.app.state.notary.log._conn
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
+
+
+def test_a_backup_never_silently_replaces_another(client, operator, tmp_path):
+    """Measured before the fix: re-running the backup command pointed at an
+    existing file replaced a five-record backup with a zero-record one, without
+    a word. For the only off-site copy of everyone's audit heads, that is not
+    an acceptable way to lose an argument."""
+    for i in range(5):
+        client.post("/notarize",
+                    content=json.dumps(make_cert(operator, request_id=f"r{i}")))
+
+    log = client.app.state.notary.log
+    out = tmp_path / "monday.db"
+    assert log.backup_to(str(out)) == 5
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        log.backup_to(str(out))
+
+    # The good copy is untouched.
+    from lethe_notary.store import WitnessLog
+    assert WitnessLog(str(out)).count() == 5
+
+    # Replacing it is possible, but has to be asked for.
+    assert log.backup_to(str(out), overwrite=True) == 5

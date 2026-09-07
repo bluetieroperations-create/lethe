@@ -12,6 +12,7 @@ witness that can be edited is not a witness.
 """
 
 import json
+import os
 import sqlite3
 from contextlib import closing
 
@@ -124,14 +125,26 @@ class WitnessLog:
             return rows[:limit], rows[limit - 1]["id"]
         return rows, None
 
-    def backup_to(self, path: str) -> int:
+    def backup_to(self, path: str, *, overwrite: bool = False) -> int:
         """Copy the whole log to `path` using SQLite's online backup.
 
         A consistent snapshot while the notary keeps serving — unlike copying
-        the file, which can catch a half-written page. One file is a single
-        point of failure for the only off-site copy of anyone's audit heads, so
-        this wants to run on a schedule and land somewhere else.
+        the file, which can catch a half-written page.
+
+        Refuses an existing path. sqlite3's backup writes straight over the
+        destination, so pointing this at yesterday's file replaces it with
+        today's — and if today's log is empty or truncated, the good copy is
+        gone. Measured: a five-record backup became a zero-record one, silently.
+        For the only off-site copy of everyone's audit heads that is not an
+        acceptable way to lose an argument, so backups get new (dated) names
+        and clobbering has to be asked for.
         """
+        if os.path.exists(path) and not overwrite:
+            raise FileExistsError(
+                f"{path} already exists; refusing to overwrite a backup. Use a "
+                f"new (dated) filename, or pass overwrite=True if replacing it "
+                f"is really what you want."
+            )
         with closing(sqlite3.connect(path)) as dest:
             self._conn.backup(dest)
         return self.count()

@@ -62,12 +62,18 @@ class _AcceptingFacilitator:
         return getattr(self._server, name)
 
     def verify_payment(self, payload, requirements, *a, **kw):
+        if self.verify_raises:
+            raise self.verify_raises
         self.verified.append((payload, requirements))
         return type("V", (), {"is_valid": True, "invalid_reason": None})()
 
     settle_succeeds = True
+    verify_raises = None
+    settle_raises = None
 
     def settle_payment(self, payload, requirements, *a, **kw):
+        if self.settle_raises:
+            raise self.settle_raises
         self.settled.append((payload, requirements))
         return type("S", (), {
             "success": self.settle_succeeds,
@@ -209,3 +215,99 @@ def test_a_settled_payment_returns_its_transaction(notary_signer, log, operator)
     assert r.status_code == 200
     assert r.json()["payment"]["transaction"].startswith("0x")
     assert r.json()["payment"]["network"] == NETWORK
+
+
+@pytest.mark.live
+def test_a_facilitator_outage_during_verification_is_a_402_not_a_500(
+    notary_signer, log, operator
+):
+    """Verification moves no money, so an unreachable facilitator costs the
+    caller a retry and nothing else. A 500 would blame the request for an
+    upstream outage."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network=NETWORK,
+                           facilitator_url="https://x402.org/facilitator")
+    app = create_app(signer=notary_signer, log=log, config=config)
+    gate = app.state.notary.gate
+    real_server = gate.server()
+    fake = _AcceptingFacilitator(real_server)
+    fake.verify_raises = ConnectionError("facilitator unreachable")
+    gate._server = fake
+
+    requirements = real_server.build_payment_requirements(gate.resource_config())
+    header = _signed_payment_header(
+        real_server.create_payment_required_response(requirements))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        r = client.post("/notarize", content=json.dumps(make_cert(operator)),
+                        headers={"PAYMENT-SIGNATURE": header})
+
+    assert r.status_code == 402
+    assert r.json()["error"]["retriable"] is True
+    assert "facilitator" in r.json()["error"]["message"]
+    assert app.state.notary.log.count() == 0
+
+
+@pytest.mark.live
+def test_an_outage_during_settlement_still_issues_the_receipt(
+    notary_signer, log, operator
+):
+    """The money may already have moved and the response been lost. Refusing
+    would repeat the pay-and-get-nothing failure through another door — and
+    worse, the caller would retry with a FRESH authorization and could be
+    charged twice.
+
+    So it is treated as paid, and recorded, which makes the retry free because
+    idempotency keys on the certificate hash. Issuing an unpaid receipt costs
+    the operator one receipt; refusing a paid one costs the customer their
+    money and their evidence.
+    """
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network=NETWORK,
+                           facilitator_url="https://x402.org/facilitator")
+    app = create_app(signer=notary_signer, log=log, config=config)
+    gate = app.state.notary.gate
+    real_server = gate.server()
+    fake = _AcceptingFacilitator(real_server)
+    fake.settle_raises = ConnectionError("facilitator timed out")
+    gate._server = fake
+
+    requirements = real_server.build_payment_requirements(gate.resource_config())
+    header = _signed_payment_header(
+        real_server.create_payment_required_response(requirements))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        r = client.post("/notarize", content=json.dumps(make_cert(operator)),
+                        headers={"PAYMENT-SIGNATURE": header})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["charged"] is True
+    # Flagged, not hidden — the operator has to reconcile this against the chain.
+    assert body["payment"]["settlement_confirmed"] is False
+    from lethe_notary.receipt import verify_receipt
+    assert verify_receipt(body["receipt"], notary_signer.public_key_b64())["valid"]
+    # Recorded, so re-presenting the same certificate is free rather than a
+    # second charge on a fresh authorization.
+    assert app.state.notary.log.count() == 1
+
+    with TestClient(app) as client:
+        again = client.post("/notarize", content=json.dumps(make_cert(operator)))
+    assert again.json()["charged"] is False
+
+
+@pytest.mark.live
+def test_a_confirmed_settlement_says_so(notary_signer, log, operator):
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network=NETWORK,
+                           facilitator_url="https://x402.org/facilitator")
+    app = create_app(signer=notary_signer, log=log, config=config)
+    gate = app.state.notary.gate
+    real_server = gate.server()
+    gate._server = _AcceptingFacilitator(real_server)
+    requirements = real_server.build_payment_requirements(gate.resource_config())
+    header = _signed_payment_header(
+        real_server.create_payment_required_response(requirements))
+
+    with TestClient(app) as client:
+        r = client.post("/notarize", content=json.dumps(make_cert(operator)),
+                        headers={"PAYMENT-SIGNATURE": header})
+
+    assert r.json()["payment"]["settlement_confirmed"] is True

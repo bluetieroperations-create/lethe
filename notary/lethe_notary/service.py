@@ -227,7 +227,7 @@ async def notarize(request):
                     "countersigned and charged but not recorded. Reconcile from "
                     "the customer's receipt.", payload_hash,
                 )
-                return JSONResponse({
+                body = {
                     "ok": True, "receipt": receipt, "already_witnessed": False,
                     "charged": bool(gate.enabled),
                     "witness_recorded": False,
@@ -236,7 +236,12 @@ async def notarize(request):
                                "receipt: it is the evidence. This certificate's "
                                "audit head is not covered by the notary's "
                                "truncation check until the operator reconciles.",
-                }, status_code=200)
+                }
+                if settlement:
+                    # They need the on-chain reference most in exactly this
+                    # case: they paid, and the notary lost its own copy.
+                    body["payment"] = settlement
+                return JSONResponse(body, status_code=200)
         finally:
             notary.release(payload_hash)
 

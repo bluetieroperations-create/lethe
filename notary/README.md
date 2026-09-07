@@ -239,6 +239,12 @@ lethe-notary backup --out /backups/witness-$(date +%F).db
 Uses SQLite's online backup, so it is a consistent snapshot taken while the
 notary keeps serving. Ship it somewhere else, on a schedule.
 
+The dated filename is not decoration: SQLite's backup writes straight over its
+destination, so a fixed name would replace yesterday's copy with today's — and
+if today's log were empty or truncated, the good copy would be gone. Backing up
+onto an existing file is refused; `--overwrite` is there if replacing one is
+really the intent.
+
 ### Rotating the notary key
 
 Receipts name the key that signed them, so a rotation without a published key
