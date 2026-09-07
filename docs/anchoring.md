@@ -27,6 +27,16 @@ Run it on a timer — hourly is a reasonable default. The interval is your
 resolution: an event is pinned to the window between the anchor before it and
 the anchor after it.
 
+Anchoring appends to the audit chain like any other event, so a scheduled
+anchor can land at the same instant as an operator's `lethe forget`. That is
+safe: the chain's `prev_hash` is unique, so the database accepts one writer and
+the other retries against the new tip.
+
+Before v0.7.0 both writes were accepted and the chain forked. If you are
+upgrading, `lethe verify-audit` reports any fork explicitly — `FORK: rows [n,
+m] all claim predecessor …` — rather than only `INVALID`, because a fork left
+by concurrent appends and a tampered entry call for very different responses.
+
 ## What this does and does not prove
 
 Be precise about this, because the two failure modes behave differently.

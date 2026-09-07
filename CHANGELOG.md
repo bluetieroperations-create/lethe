@@ -9,6 +9,125 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **A `forget` that outruns the audit chain now says the rows are gone.** If
+  the completion append exhausts its retries under contention, the deletion has
+  *already* happened — but a bare `AuditContention` reads as "the forget
+  failed", and an operator would retry a deletion that completed, find nothing,
+  and conclude nothing was ever deleted. `Lethe.forget` now raises
+  `ForgetRecordedIncompletely`, which states that the deletion completed, names
+  the record count and the `forget_started` head, says not to re-run it, and
+  carries the certificate — at that point the only record of the run outside
+  the chain.
+
+## [0.7.0] — 2026-09-06
+
+### Fixed
+
+- **Concurrent audit appends no longer fork the chain.** `AuditLog.append`
+  reads the chain tip, hashes it, and inserts. Two writers that read the same
+  tip both committed, leaving two entries claiming one predecessor — and
+  `verify_chain()` then reported the operator's own log as tampered with, at
+  exactly the moment they were trying to prove it had not been.
+
+  This was not hypothetical and not MCP-specific. Every CLI command opens its
+  own connection, and `docs/anchoring.md` tells operators to run `lethe anchor`
+  hourly on a timer, so a scheduled anchor overlapping a `lethe forget` is the
+  documented deployment. Measured before the fix: 8 concurrent appends across
+  separate connections produced 8 entries with 5 distinct `prev_hash` values
+  and `verify_chain()` returning `False`.
+
+  `prev_hash` now carries a `UNIQUE` index. In a linear chain every entry links
+  to a distinct predecessor, so uniqueness *is* the chain invariant; stating it
+  as a database constraint makes a fork impossible rather than unlikely. The
+  losing writer is rejected, re-reads the tip, and links onto the winner's
+  entry. This is the only guard that works across processes — an in-process
+  lock cannot help two CLI invocations.
+
+  Retries back off with full jitter. Without it, writers that collide once
+  collide again in lockstep: measured at 24 concurrent writers, 5 exhausted
+  their attempts and their entries were never recorded. The chain stayed
+  intact, but an unrecorded forget is its own kind of hole. With backoff, 40
+  concurrent writers across separate connections all record, chain intact,
+  stable across repeated runs.
+
+  **Known limitation, now documented:** this makes concurrent *connections*
+  safe, not one connection shared by concurrent threads — there the transaction
+  is shared, so a rollback in one thread aborts another's work. The MCP server
+  holds a single connection and serializes tool bodies for exactly this reason.
+
+- **`lethe verify-audit` names a fork instead of only saying `INVALID`.**
+  `INVALID` covers a fork, a tampered entry and a truncated tail — three
+  situations calling for very different responses. An operator upgrading a
+  chain written before this release, reading `INVALID` as "we were breached"
+  when concurrent appends were the cause, has been told the wrong thing. The
+  command now prints `FORK: rows [n, m] all claim predecessor …` for each
+  split, and says that concurrency explains it. `AuditLog.forks()` is the
+  underlying query.
+
+- **`init_schema` upgrades an existing table in place**, adding the index to
+  chains written by earlier versions. If such a chain already contains a fork
+  the index cannot be built, and rather than a raw Postgres error this raises
+  `AuditChainForked` naming the duplicated hashes and the rows that share them.
+  The rows are left untouched — they are evidence, not something to clean up
+  silently. `AuditLog.forks()` reports the same thing on demand.
+
+### Not changed, deliberately
+
+- **MCP tool calls stay serialized.** Now that the chain is safe at the
+  database, the remaining reason for the lock is the single shared psycopg
+  connection. Adding a connection pool would buy throughput that a
+  DSAR-deletion workload does not need, in the subsystem where correctness is
+  the product. `lethe/mcp.py` records the reasoning.
+
+## [0.6.0] — 2026-09-06
+
+### Changed
+
+- **Migrated the MCP server to the `mcp` 2.x SDK** (`lethe-delete[mcp]` now
+  requires `mcp>=2,<3`). `FastMCP` became `MCPServer`, `ToolAnnotations` fields
+  are read back as snake_case, and `call_tool` returns a `CallToolResult`
+  rather than bare content blocks.
+
+  **The rename was the small part.** mcp 1.x called sync tool functions inline
+  on the event-loop thread, so tool calls serialized on their own; 2.x
+  dispatches them through `anyio.to_thread.run_sync`, so they run concurrently
+  on worker threads. `lethe/mcp.py` had carried a comment since v0.1 saying
+  exactly this would break it — "an SDK that moves sync tools to a threadpool
+  makes both hazards live" — and it was right:
+
+  - `AuditLog.append` reads the chain tip, hashes it, and inserts. Concurrent
+    appends read the same tip and the chain **forks**. Measured against a real
+    database before the fix: 8 appends produced 4 distinct `prev_hash` values
+    and `verify_chain()` returned `False`. A forked chain reports the
+    operator's own audit log as tampered with — the property every certificate
+    leans on.
+  - The server holds one psycopg connection, so overlapping tools share a
+    transaction boundary and one tool's `commit()` lands another's
+    half-finished work.
+
+  Tool bodies are now serialized under a single lock, restoring the exact
+  execution model the handlers were written and tested against — this is a
+  correctness fix, not a throughput trade-off. Tools are registered through a
+  helper so a new one cannot silently opt out, and
+  `tests/test_mcp_concurrency.py` pins all of it: that bodies do not overlap,
+  that the SDK *would* overlap them without the lock (so the first test cannot
+  quietly stop proving anything), and that concurrent appends fork the chain.
+
+  Verified end to end over the real stdio transport against a live database:
+  12 concurrent tags followed by 12 overlapping preview/forget cycles gave
+  12/12 successful forgets, all certificates `all_verified`, and an audit chain
+  of 24 entries with 24 distinct `prev_hash` — intact.
+
+  `docs/m2m.md` now documents the serialization, since it is behaviour an
+  agent driver can observe.
+
+- **Dependabot no longer ignores the `mcp` major bump.** The ignore entry
+  added in 0.5.0 said to remove it as part of this migration; done.
+
 ## [0.5.0] — 2026-09-06
 
 ### Added

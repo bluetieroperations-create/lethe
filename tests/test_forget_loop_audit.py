@@ -178,3 +178,101 @@ def test_shared_record_id_forget_does_not_falsely_certify_other_subject(env):
         "Bob certified as 'deleted & verified absent' with zero actual deletions "
         "— Lethe certifies an erasure it did not perform"
     )
+
+
+def test_a_forget_survives_an_audit_append_losing_the_race(env):
+    """append() rolls back on a lost race before retrying, and it shares the
+    caller's connection — so if a forget's deletions were still uncommitted at
+    that point, the rollback would silently undo them and the retry would then
+    record a deletion that no longer existed.
+
+    They are not: the connector and the ledger each commit as they go. This
+    pins that, because the invariant lives in three files and nothing else
+    states it. Removing the commit from PgVectorConnector.delete() fails here.
+    """
+    conn, ledger, audit, make = env
+    lethe = make()
+    for rid in ("r1", "r2", "r3"):
+        lethe.tag("alice@example.test", "pgvector", "test_vectors", rid)
+
+    # Force the completion append to lose exactly once: hand it a prev_hash
+    # that is already taken, which guarantees the UniqueViolation → rollback →
+    # retry path runs on the same connection the deletes used.
+    real_last_hash = audit._last_hash
+    forced = []
+
+    def stale_tip():
+        if not forced:
+            with conn.cursor() as cur:
+                cur.execute("SELECT prev_hash FROM lethe_audit ORDER BY seq DESC LIMIT 1")
+                row = cur.fetchone()
+            if row:
+                forced.append(True)
+                return row[0]
+        return real_last_hash()
+
+    audit._last_hash = stale_tip
+    try:
+        cert = lethe.forget("alice@example.test")
+    finally:
+        audit._last_hash = real_last_hash
+
+    assert forced, "the conflict path never ran; this test proved nothing"
+    assert cert.payload["all_verified"] is True
+    assert cert.payload["records_deleted"] == 3
+
+    # The deletions survived the rollback.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM test_vectors")
+        assert cur.fetchone()[0] == 0
+    assert audit.verify_chain() is True
+
+
+def test_a_deletion_that_outruns_the_audit_chain_says_the_rows_are_gone(env):
+    """If the completion append exhausts its retries, the rows are ALREADY
+    deleted. A bare "could not append" reads as "the forget failed", and the
+    operator retries a deletion that has in fact completed — finding nothing
+    the second time and concluding, wrongly, that nothing was ever deleted.
+
+    The error has to say the deletion happened, and carry the certificate,
+    which at that point is the only record of the run outside the chain.
+    """
+    import pytest
+
+    from lethe.audit import AuditContention
+    from lethe.core import ForgetRecordedIncompletely
+
+    conn, ledger, audit, make = env
+    lethe = make()
+    for rid in ("r1", "r2", "r3"):
+        lethe.tag("alice@example.test", "pgvector", "test_vectors", rid)
+
+    real_append = audit.append
+    calls = {"n": 0}
+
+    def append(entry):
+        calls["n"] += 1
+        if entry.get("event") == "forget":       # the completion entry only
+            raise AuditContention("another writer is advancing the chain")
+        return real_append(entry)
+
+    audit.append = append
+    try:
+        with pytest.raises(ForgetRecordedIncompletely) as e:
+            lethe.forget("alice@example.test")
+    finally:
+        audit.append = real_append
+
+    message = str(e.value)
+    assert "deletion COMPLETED" in message
+    assert "Do not re-run it" in message
+    assert e.value.certificate.payload["records_deleted"] == 3
+
+    # The rows really are gone, so the message is telling the truth.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM test_vectors")
+        assert cur.fetchone()[0] == 0
+    # And forget_started is on the chain, recording that the run began.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM lethe_audit WHERE entry->>'event' = 'forget_started'")
+        assert cur.fetchone()[0] == 1

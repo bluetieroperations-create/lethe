@@ -9,6 +9,7 @@ import functools
 import json
 import os
 import sys
+import threading
 import traceback
 from collections import defaultdict
 from dataclasses import dataclass
@@ -336,19 +337,39 @@ def build_context(environ=os.environ) -> ServerContext:
 
 
 def create_server(ctx: ServerContext):
-    # CONCURRENCY INVARIANT: every tool below must stay a plain sync def with
-    # no awaits. FastMCP runs sync tools inline on the event-loop thread, so
-    # calls serialize — which is what makes sharing ONE psycopg connection and
-    # the audit hash-chain's read-tip-then-insert safe. An async handler (or an
-    # SDK that moves sync tools to a threadpool) makes both hazards live.
-    from mcp.server.fastmcp import FastMCP
+    # CONCURRENCY INVARIANT: tool bodies run one at a time, and every tool
+    # below must stay a plain sync def with no awaits.
+    #
+    # Under mcp 1.x this was free: FastMCP called sync tools inline on the
+    # event-loop thread, so they serialized on their own. mcp 2.x dispatches
+    # them through anyio.to_thread.run_sync instead, so concurrent calls run
+    # on separate worker threads — the exact hazard this comment used to warn
+    # about ("an SDK that moves sync tools to a threadpool").
+    #
+    # The audit chain is no longer at risk here: a unique index on prev_hash
+    # makes a fork impossible at the database, across processes, which is
+    # where the real exposure was (a cron `lethe anchor` racing an operator's
+    # `lethe forget` — see lethe/audit.py). What is left is the single shared
+    # psycopg connection: concurrent tools on one connection share a
+    # transaction boundary, so one tool's commit lands another's half-finished
+    # work, and a statement rolled back in one thread aborts the transaction
+    # the other is still using. That is not fixable at the database, and it is
+    # what this lock is for.
+    #
+    # So the lock is not a throughput trade-off: it restores the exact
+    # execution model the handlers were written and tested against. Tools are
+    # registered through _tool() below so a new one cannot silently opt out.
+    from mcp.server.mcpserver import MCPServer
     from mcp.types import ToolAnnotations
 
-    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
-    write = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
-    destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+    # mcp 2.x exposes these as snake_case fields (the camelCase wire names are
+    # aliases). Constructing by alias still works, but reading back does not,
+    # so use the field names both ways rather than mixing.
+    read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False)
+    write = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+    destructive = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
-    server = FastMCP(
+    server = MCPServer(
         "lethe",
         instructions=(
             "Provable deletion for AI memory. Destructive flow is two-step: "
@@ -358,37 +379,57 @@ def create_server(ctx: ServerContext):
         ),
     )
 
-    @server.tool(annotations=read_only)
+    # One lock for the whole server, held for the duration of a tool body.
+    # threading.Lock (not asyncio.Lock): under mcp 2.x the bodies run on
+    # anyio worker threads, so the contention is between OS threads.
+    call_lock = threading.Lock()
+
+    def _tool(annotations: ToolAnnotations):
+        """Register a tool, serialized. functools.wraps keeps __doc__ and
+        __wrapped__, so the SDK still derives the description and the argument
+        schema from the original function."""
+        def decorate(fn):
+            @functools.wraps(fn)
+            def serialized(*args, **kwargs):
+                with call_lock:
+                    return fn(*args, **kwargs)
+
+            server.tool(annotations=annotations)(serialized)
+            return fn
+
+        return decorate
+
+    @_tool(read_only)
     def lethe_status() -> dict:
         """Server mode (full or verify-only), connectors, audit head, versions."""
         return h_status(ctx)
 
-    @server.tool(annotations=write)
+    @_tool(write)
     def lethe_tag(subject_id: str, store: str, namespace: str, record_id: str) -> dict:
         """Tag a stored record as belonging to a data subject, so a later
         forget can find and provably delete it."""
         return h_tag(ctx, subject_id, store, namespace, record_id)
 
-    @server.tool(annotations=read_only)
+    @_tool(read_only)
     def lethe_forget_preview(subject_id: str) -> dict:
         """Dry run: per-layer record counts that a forget WOULD delete, plus a
         single-use confirm_token (expires in ~10 minutes). Deletes nothing."""
         return h_forget_preview(ctx, subject_id)
 
-    @server.tool(annotations=destructive)
+    @_tool(destructive)
     def lethe_forget(subject_id: str, confirm_token: str) -> dict:
         """DESTRUCTIVE: permanently delete the subject across all tagged layers,
         verify absence, and return the signed deletion certificate. Requires the
         confirm_token from lethe_forget_preview for this same subject."""
         return h_forget(ctx, subject_id, confirm_token)
 
-    @server.tool(annotations=read_only)
+    @_tool(read_only)
     def lethe_verify_subject(subject_id: str) -> dict:
         """Post-hoc spot check: re-verify (without deleting) whether the
         subject's tagged records are absent from each layer."""
         return h_verify_subject(ctx, subject_id)
 
-    @server.tool(annotations=read_only)
+    @_tool(read_only)
     def lethe_verify_certificate(certificate: dict, public_key: str | None = None) -> dict:
         """Verify a Lethe deletion certificate: JSON-Schema shape plus key-pinned
         Ed25519 check. public_key (base64) overrides LETHE_TRUSTED_PUBLIC_KEY."""

@@ -43,6 +43,16 @@ Claude Code registration example:
 | `lethe_verify_subject` | read | re-check absence per layer, deletes nothing |
 | `lethe_verify_certificate` | read | schema + key-pinned Ed25519 verification |
 
+## Concurrency
+
+Tool calls are **serialized**: the server executes one tool body at a time,
+however many an agent issues in parallel. The server holds a single database
+connection, and the audit chain is appended by reading its tip and hashing it,
+so overlapping calls would fork the chain the certificates depend on.
+
+For a caller this means parallelism buys nothing — issue calls at whatever
+rate is convenient, but size timeouts for a queue rather than for one call.
+
 ## The two-step flow
 
 1. `lethe_forget_preview(subject_id)` → per-layer counts + `confirm_token`.

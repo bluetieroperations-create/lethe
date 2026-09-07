@@ -1,6 +1,6 @@
 """The whole M2M story in one test: an agent tags, previews, confirms,
 deletes, re-verifies, and machine-verifies the certificate — plus one
-call_tool smoke through the real FastMCP layer."""
+call_tool smoke through the real MCP server layer."""
 
 import asyncio
 import json
@@ -79,12 +79,14 @@ def test_full_agent_flow(conn):
     assert verdict["ok"] and verdict["valid"] is True
 
 
-def test_call_tool_smoke_through_fastmcp():
+def test_call_tool_smoke_through_the_sdk():
     ctx = ServerContext(lethe=None, guard=None, trusted_public_key=None)
     server = create_server(ctx)
     result = asyncio.run(server.call_tool("lethe_status", {}))
-    # FastMCP returns content blocks (newer SDKs may return (content, structured)).
-    content = result[0] if isinstance(result, tuple) else result
-    payload = json.loads(content[0].text)
+    # mcp 2.x returns a CallToolResult; 1.x returned bare content blocks (or a
+    # (content, structured) tuple). Pin the 2.x shape — a tool reporting
+    # is_error would otherwise read as a pass here.
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
     assert payload["ok"] is True
     assert payload["mode"] == "verify-only"

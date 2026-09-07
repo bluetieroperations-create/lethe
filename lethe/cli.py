@@ -349,11 +349,24 @@ def anchor(
 )
 def verify_audit(database_url: str, expected_head: str | None) -> None:
     with psycopg.connect(database_url) as conn:
-        ok = AuditLog(conn).verify_chain(expected_head=expected_head)
+        log = AuditLog(conn)
+        ok = log.verify_chain(expected_head=expected_head)
+        forks = log.forks()
     if expected_head is None:
         click.echo(
             "WARNING: no --expected-head given; internal links checked but "
             "tip-truncation is undetectable.",
+            err=True,
+        )
+    # INVALID alone cannot be acted on: a fork and a tampered entry demand very
+    # different responses, and an operator who reads "INVALID" as "we were
+    # breached" when a chain written before v0.7.0 simply forked under
+    # concurrent appends has been told the wrong thing. Name it.
+    for prev_hash, seqs in forks:
+        click.echo(
+            f"FORK: rows {seqs} all claim predecessor {prev_hash}. Concurrent "
+            "appends before v0.7.0 could produce this without tampering; from "
+            "v0.7.0 the database refuses it.",
             err=True,
         )
     click.echo("VALID" if ok else "INVALID")
