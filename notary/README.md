@@ -142,7 +142,8 @@ append-only and readable only by whoever controls the key that wrote to it.
 ## Running it
 
 ```bash
-pip install -e .                # from this directory; installs lethe-delete too
+pip install -e ..               # lethe-delete, from the repo root
+pip install -e .                # then the notary, from this directory
 lethe-notary keygen --out notary.key          # back this up offline
 export LETHE_NOTARY_KEY_FILE=notary.key
 export LETHE_NOTARY_PAY_TO=0xYourAddress
@@ -157,6 +158,11 @@ sidesteps PATH entirely:
 ```bash
 python -m lethe_notary.cli serve
 ```
+
+`lethe-delete` is installed from the repo root first, not pulled from PyPI:
+this package requires `lethe-delete>=0.7`, and until a release carrying that
+version is published, `pip install -e .` alone fails with *no matching
+distribution*. Installing the checkout first satisfies it from source.
 
 On Windows PowerShell, environment variables are `$env:NAME = "value"`, and
 the price must be in **single** quotes — `$env:LETHE_NOTARY_PRICE = '$0.02'` —

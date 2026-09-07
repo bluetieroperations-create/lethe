@@ -6,7 +6,7 @@ destructive step is guarded by a two-step confirm token instead.
 
 ## Install & run
 
-    pip install "lethe-delete[mcp]"
+    pip install "lethe-delete[mcp]>=0.6"
     lethe-mcp        # stdio MCP server
 
 Full mode (can delete) — set:

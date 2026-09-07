@@ -46,7 +46,7 @@ once and writes tag themselves.
 ## Quickstart (drop-in)
 
 ```bash
-pip install -e .            # from source for now (PyPI soon)
+pip install "lethe-delete>=0.7"      # or `pip install -e .` to work on it
 lethe keygen --out lethe_key.bin     # one-time: your signing key (prints the public key)
 export DATABASE_URL=...              # your own Postgres
 export LETHE_SALT=...                # a secret; pseudonymizes subjects in the ledger
@@ -183,7 +183,7 @@ proves far more against a third party than against the operator who issued it.
 Lethe ships an MCP server so autonomous agents can execute provable deletion
 and verify certificates machine-to-machine:
 
-    pip install "lethe-delete[mcp]"
+    pip install "lethe-delete[mcp]>=0.6"
     lethe-mcp
 
 Destructive deletes are two-step (preview → confirm token → forget), and any
