@@ -201,6 +201,57 @@ jobs:
       - name: The buyer script must run
         run: python notary/tools/pay.py --help > /dev/null
 
+  # verify.html re-implements Lethe's canonical JSON in JavaScript so the demo
+  # can check a certificate offline, and nothing else here compares the two
+  # implementations. They cannot be compared by reading them: Python's
+  # json.dumps defaults to ensure_ascii=True, so the em dash in the claim text
+  # is emitted as an escape, while JSON.stringify emits the character. A page
+  # that gets this wrong reports INVALID for every genuine certificate — and
+  # the demo is the only place that would find out, in front of a customer.
+  # The certificate is minted here rather than frozen into a fixture, so a
+  # change to the payload shape or the claim text fails this job instead of
+  # quietly drifting away from a blob that still agrees with itself.
+  verifier:
+    name: Demo certificate verifier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Mint a certificate for the verifier to check
+        run: |
+          python - <<'PY'
+          import json
+
+          from lethe.certificate import build_certificate, certificate_to_dict
+          from lethe.models import LayerResult
+          from lethe.signing import Signer
+
+          signer = Signer.generate()
+          cert = build_certificate(
+              request_id="ci", subject_hash="a" * 64,
+              layers=[LayerResult("pgvector", "candidates", 1, True, requested_count=1)],
+              issued_at="2026-01-01T00:00:00+00:00", version="ci", signer=signer,
+              valid_until="2026-04-01T00:00:00+00:00",
+              declared_scope=["pgvector"], audit_head="b" * 64,
+          )
+          with open("ci-cert.json", "w") as f:
+              json.dump({"cert": certificate_to_dict(cert),
+                         "public_key": signer.public_key_b64()}, f)
+          print("minted ci-cert.json")
+          PY
+
+      # node is preinstalled on ubuntu-latest; the test has no dependencies,
+      # deliberately, because neither does the page it tests.
+      - name: Verifier tests
+        run: node examples/recruiting-demo/verify.test.mjs ci-cert.json
+
   test:
     runs-on: ubuntu-latest
     strategy:
