@@ -5,6 +5,10 @@ import json
 import pytest
 from conftest import make_cert
 from lethe_notary.payments import PaymentConfig, PaymentConfigError, PaymentGate
+
+# A well-formed EVM address. The burn address, so a stray real payment would
+# go nowhere rather than to someone.
+PAYEE = "0x000000000000000000000000000000000000dEaD"
 from lethe_notary.service import create_app
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
@@ -30,7 +34,7 @@ def test_a_plaintext_facilitator_is_refused():
     an interceptable claim about money."""
     with pytest.raises(PaymentConfigError) as e:
         PaymentConfig.from_env({
-            "LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD",
+            "LETHE_NOTARY_PAY_TO": PAYEE,
             "LETHE_NOTARY_FACILITATOR": "http://facilitator.example",
         })
     assert "https" in str(e.value)
@@ -38,7 +42,8 @@ def test_a_plaintext_facilitator_is_refused():
 
 def test_a_configured_notary_reads_price_and_network():
     config = PaymentConfig.from_env({
-        "LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD", "LETHE_NOTARY_PRICE": "$0.05",
+        "LETHE_NOTARY_PAY_TO": PAYEE,
+        "LETHE_NOTARY_PRICE": "$0.05",
         "LETHE_NOTARY_NETWORK": "base-sepolia",
     })
     assert (config.price, config.network, config.free_mode) == ("$0.05", "base-sepolia", False)
@@ -48,7 +53,8 @@ def test_the_default_network_is_one_the_default_facilitator_can_settle():
     """The public x402.org facilitator advertises testnet kinds only.
     Defaulting to mainnet would give a notary that starts cleanly and fails
     every paid request."""
-    assert PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD"}).network == "base-sepolia"
+    config = PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": PAYEE})
+    assert config.network == "base-sepolia"
 
 
 # -- the real 402 branch, against the actual SDK ----------------------------
@@ -66,7 +72,7 @@ def test_an_unpaid_request_gets_a_real_decodable_payment_required_header(
 ):
     from x402.http import PAYMENT_REQUIRED_HEADER, decode_payment_required_header
 
-    config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD",
+    config = PaymentConfig(pay_to=PAYEE,
                            price="$0.02", network="base-sepolia",
                            facilitator_url="https://x402.org/facilitator")
     app = create_app(signer=notary_signer, log=log, config=config)
@@ -92,7 +98,7 @@ def test_an_unpaid_request_gets_a_real_decodable_payment_required_header(
 def test_a_garbled_payment_signature_is_a_402_not_a_500(notary_signer, log, operator):
     """A malformed payment is the caller's mistake. It must not reach the
     facilitator and must not look like a server fault."""
-    config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD",
+    config = PaymentConfig(pay_to=PAYEE,
                            price="$0.02", network="base-sepolia",
                            facilitator_url="https://x402.org/facilitator")
     app = create_app(signer=notary_signer, log=log, config=config)
@@ -121,7 +127,7 @@ class _FakeGate:
     def __init__(self, accept=True):
         self.accept = accept
         self.charges = 0
-        self.config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01", network="base-sepolia",
+        self.config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="base-sepolia",
                                     facilitator_url="https://x402.org/facilitator")
 
     def charge(self, request):
@@ -223,7 +229,7 @@ def test_witness_retrieval_and_discovery_are_never_charged(paid, operator):
 
 def test_gate_is_disabled_only_in_free_mode(free_config):
     assert PaymentGate(free_config).enabled is False
-    paid_config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01", network="base-sepolia",
+    paid_config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="base-sepolia",
                                 facilitator_url="https://x402.org/facilitator")
     assert PaymentGate(paid_config).enabled is True
 
