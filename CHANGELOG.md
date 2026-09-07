@@ -9,7 +9,40 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
-## [Unreleased]
+## [0.7.0] — 2026-09-07
+
+### Added
+
+- **`notary/` — a paid countersigning witness, billed over
+  [x402](https://x402.org/).** A separate distribution (`lethe-notary`); nothing
+  in `lethe` depends on it and `lethe` gains no payment dependency.
+
+  It sells the one thing Lethe structurally cannot give itself. A certificate
+  is self-attestation — `docs/anchoring.md` says nothing in the artifact brings
+  in a party the operator does not control — so the notary is that party: an
+  independent clock, an independent signature, and **a countersigned record of
+  the audit head**. That last one is the product, because tip-truncation is
+  undetectable from inside the chain.
+
+  The evidence is the receipt, which the operator holds and the notary cannot
+  repudiate — not the notary's own log, which is why that log is not
+  hash-chained (chaining it would only let the notary prove things to itself).
+  `/witness` reads the heads back during a dispute; it is a convenience, and
+  `notary/README.md` says so.
+
+  A receipt claims only what the notary can support: that a certificate was
+  *presented* at a time, is *internally valid*, and named this head. Not the
+  presenter's identity, and not that the deletion happened.
+
+  The controller pays, for evidence about their own compliance — nothing sits
+  between a data subject and their erasure (GDPR Art. 12(5)), and witness
+  retrieval, the query run during a dispute, is permanently free. A certificate
+  that fails verification is never charged for, nor is one already witnessed.
+
+  Settlement is verified on-chain — 0.01 USDC moved by EIP-3009
+  `TransferWithAuthorization` in block 46487830 — **on Base Sepolia**. Mainnet
+  needs a facilitator that settles it, and the first mainnet payment deserves
+  the same scrutiny: check the chain, not the `200`.
 
 ### Fixed
 
@@ -22,10 +55,6 @@ that issued it.
   the record count and the `forget_started` head, says not to re-run it, and
   carries the certificate — at that point the only record of the run outside
   the chain.
-
-## [0.7.0] — 2026-09-06
-
-### Fixed
 
 - **Concurrent audit appends no longer fork the chain.** `AuditLog.append`
   reads the chain tip, hashes it, and inserts. Two writers that read the same
