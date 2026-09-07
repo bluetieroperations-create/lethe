@@ -44,9 +44,9 @@ def test_a_configured_notary_reads_price_and_network():
     config = PaymentConfig.from_env({
         "LETHE_NOTARY_PAY_TO": PAYEE,
         "LETHE_NOTARY_PRICE": "$0.05",
-        "LETHE_NOTARY_NETWORK": "base-sepolia",
+        "LETHE_NOTARY_NETWORK": "eip155:84532",
     })
-    assert (config.price, config.network, config.free_mode) == ("$0.05", "base-sepolia", False)
+    assert (config.price, config.network, config.free_mode) == ("$0.05", "eip155:84532", False)
 
 
 def test_the_default_network_is_one_the_default_facilitator_can_settle():
@@ -54,7 +54,7 @@ def test_the_default_network_is_one_the_default_facilitator_can_settle():
     Defaulting to mainnet would give a notary that starts cleanly and fails
     every paid request."""
     config = PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": PAYEE})
-    assert config.network == "base-sepolia"
+    assert config.network == "eip155:84532"
 
 
 # -- the real 402 branch, against the actual SDK ----------------------------
@@ -73,7 +73,7 @@ def test_an_unpaid_request_gets_a_real_decodable_payment_required_header(
     from x402.http import PAYMENT_REQUIRED_HEADER, decode_payment_required_header
 
     config = PaymentConfig(pay_to=PAYEE,
-                           price="$0.02", network="base-sepolia",
+                           price="$0.02", network="eip155:84532",
                            facilitator_url="https://x402.org/facilitator")
     app = create_app(signer=notary_signer, log=log, config=config)
     with TestClient(app) as client:
@@ -90,7 +90,7 @@ def test_an_unpaid_request_gets_a_real_decodable_payment_required_header(
     def get(o, k):
         return o.get(k) if isinstance(o, dict) else getattr(o, k, None)
 
-    assert "84532" in str(get(option, "network")) or get(option, "network") == "base-sepolia"
+    assert "84532" in str(get(option, "network")) or get(option, "network") == "eip155:84532"
     assert get(option, "payTo") or get(option, "pay_to") == config.pay_to
 
 
@@ -99,7 +99,7 @@ def test_a_garbled_payment_signature_is_a_402_not_a_500(notary_signer, log, oper
     """A malformed payment is the caller's mistake. It must not reach the
     facilitator and must not look like a server fault."""
     config = PaymentConfig(pay_to=PAYEE,
-                           price="$0.02", network="base-sepolia",
+                           price="$0.02", network="eip155:84532",
                            facilitator_url="https://x402.org/facilitator")
     app = create_app(signer=notary_signer, log=log, config=config)
     with TestClient(app) as client:
@@ -127,7 +127,7 @@ class _FakeGate:
     def __init__(self, accept=True):
         self.accept = accept
         self.charges = 0
-        self.config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="base-sepolia",
+        self.config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
                                     facilitator_url="https://x402.org/facilitator")
 
     def charge(self, request):
@@ -229,7 +229,7 @@ def test_witness_retrieval_and_discovery_are_never_charged(paid, operator):
 
 def test_gate_is_disabled_only_in_free_mode(free_config):
     assert PaymentGate(free_config).enabled is False
-    paid_config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="base-sepolia",
+    paid_config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
                                 facilitator_url="https://x402.org/facilitator")
     assert PaymentGate(paid_config).enabled is True
 
@@ -253,7 +253,7 @@ def test_a_payee_that_cannot_receive_money_is_refused(bad):
     after taking someone's money."""
     with pytest.raises(PaymentConfigError, match="not a valid address"):
         PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": bad,
-                                "LETHE_NOTARY_NETWORK": "base-sepolia"})
+                                "LETHE_NOTARY_NETWORK": "eip155:84532"})
 
 
 def test_a_transposed_character_is_caught_by_the_eip55_checksum():
@@ -261,11 +261,11 @@ def test_a_transposed_character_is_caught_by_the_eip55_checksum():
     detectable — which is exactly the typo a human makes copying an address."""
     good = "0xd3eD2dD9ff7e7783E8FD8Df1f4e9803b2B6C5151"
     PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": good,
-                            "LETHE_NOTARY_NETWORK": "base-sepolia"})   # fine
+                            "LETHE_NOTARY_NETWORK": "eip155:84532"})   # fine
 
     with pytest.raises(PaymentConfigError, match="checksum"):
         PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": good[:-1] + "2",
-                                "LETHE_NOTARY_NETWORK": "base-sepolia"})
+                                "LETHE_NOTARY_NETWORK": "eip155:84532"})
 
 
 def test_an_all_lowercase_address_is_allowed():
@@ -273,7 +273,7 @@ def test_an_all_lowercase_address_is_allowed():
     and refusing it would reject addresses people legitimately paste."""
     PaymentConfig.from_env({
         "LETHE_NOTARY_PAY_TO": "0xd3ed2dd9ff7e7783e8fd8df1f4e9803b2b6c5151",
-        "LETHE_NOTARY_NETWORK": "base-sepolia"})
+        "LETHE_NOTARY_NETWORK": "eip155:84532"})
 
 
 def test_a_non_evm_network_skips_the_evm_shape_check():

@@ -1,0 +1,37 @@
+{
+  "payload": {
+    "schema": "lethe.cert/3",
+    "key_id": "ed25519:743e80f84da2a4c2013e2cbf2c2a4d3a",
+    "request_id": "testnet-trial",
+    "subject_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issued_at": "2026-01-01T00:00:00+00:00",
+    "valid_until": null,
+    "lethe_version": "0.7.0",
+    "claim": "Deleted across the listed retrieval layers and verified absent by re-query at issue time against the configured endpoint, recording the residual match count for each layer. Scope is limited to the declared connectors (declared_scope); a store not listed there was not checked. The absence is asserted as of issued_at and is not asserted beyond valid_until (when set) \u2014 re-verify after that time, as the underlying index can change (possible only where reverifiable is true; otherwise the issuer did not retain the record identifiers a re-query needs). Not a guarantee of erasure from backups, model weights, or systems outside Lethe's configured connectors, nor a guarantee against read replicas, caches, or asynchronous propagation (e.g. eventually-consistent stores such as Pinecone). This certificate is self-issued: issued_at is the issuer's own clock, and the signature proves only that the holder of key_id produced it. Where audit_head is set, the certificate is bound to that position in the issuer's tamper-evident audit chain. Where timestamp is null, no external timestamping authority has corroborated the issue time.",
+    "declared_scope": [],
+    "audit_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "timestamp": null,
+    "reverifiable": false,
+    "all_verified": true,
+    "layers_found": 1,
+    "records_deleted": 1,
+    "all_layers_handled": true,
+    "layers": [
+      {
+        "store": "pgvector",
+        "namespace": "docs",
+        "deleted_count": 1,
+        "verified_absent": true,
+        "requested_count": 1,
+        "handled": true,
+        "erased": true,
+        "residual_count": null,
+        "verify_method": null,
+        "index_version": null
+      }
+    ]
+  },
+  "payload_hash": "f3be8ad84c4bbb6260792e0aad71d9b93ad2e294dee8994ecac9184935049c45",
+  "signature": "pvlMdhGibq/pJ/xt9+dNYXcc32seybrUenwam+J53Di2WECFuHVzuq3dh8w1MaiGwIJWe4pS9o04AlCY/F23CA==",
+  "public_key": "E+aPYPJdOJlcniuwNWdNplWVKFshdojAqETqfFAWW1M="
+}

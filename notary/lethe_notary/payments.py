@@ -33,11 +33,50 @@ class PaymentConfigError(Exception):
 # x402 supports) use different formats entirely, so the shape check applies
 # only where it is meaningful.
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_CAIP2 = re.compile(r"^[a-z0-9-]{3,8}:[a-zA-Z0-9_-]{1,32}$")
+
+# Only to make the error message actionable; not an exhaustive list.
+_ALIAS_TO_CAIP2 = {
+    "base": "eip155:8453",
+    "base-sepolia": "eip155:84532",
+    "avalanche": "eip155:43114",
+    "avalanche-fuji": "eip155:43113",
+    "polygon": "eip155:137",
+    "polygon-amoy": "eip155:80002",
+}
 _NON_EVM_PREFIXES = ("solana", "sui", "aptos", "stellar", "algorand", "near", "tron")
 
 
 def _looks_evm(network: str) -> bool:
-    return not network.lower().startswith(_NON_EVM_PREFIXES)
+    return network.lower().startswith("eip155:") or not network.lower().startswith(
+        _NON_EVM_PREFIXES
+    )
+
+
+def check_network(network: str) -> None:
+    """Refuse a network name a paying client will not match.
+
+    The server builds payment requirements from whatever string it is given,
+    and an alias like "base-sepolia" produces a perfectly well-formed 402. The
+    official client then normalizes to CAIP-2, finds no match, and refuses to
+    pay with "no payment requirements match registered schemes". The notary
+    looks healthy and nobody can buy anything.
+
+    Found by pointing a real x402 client at it. Nothing in the server-side SDK
+    complains, so the check has to live here.
+    """
+    if _CAIP2.match(network):
+        return
+    suggestion = _ALIAS_TO_CAIP2.get(network.lower())
+    hint = f" Use {suggestion!r}." if suggestion else (
+        " Use the CAIP-2 form, e.g. 'eip155:8453' for Base mainnet."
+    )
+    raise PaymentConfigError(
+        f"LETHE_NOTARY_NETWORK={network!r} is not a CAIP-2 network id, so the "
+        f"payment requirements this notary quotes will not match what a paying "
+        f"client registers, and every payment will be refused before it is "
+        f"attempted.{hint}"
+    )
 
 
 def check_pay_to(pay_to: str, network: str) -> None:
@@ -99,12 +138,19 @@ class PaymentConfig:
         config = cls(
             pay_to=pay_to,
             price=env.get("LETHE_NOTARY_PRICE", "$0.01"),
-            # base-sepolia, not base: the default public facilitator at
-            # x402.org advertises testnet kinds only. Defaulting to mainnet
-            # would produce a notary that starts happily and then fails every
-            # paid request. Point LETHE_NOTARY_FACILITATOR at a mainnet
-            # facilitator before setting this to "base".
-            network=env.get("LETHE_NOTARY_NETWORK", "base-sepolia"),
+            # CAIP-2, and a testnet. Two separate reasons:
+            #
+            # CAIP-2 ("eip155:84532") rather than the alias ("base-sepolia"):
+            # the server will happily build requirements from an alias, but the
+            # official x402 client normalizes to CAIP-2 and then reports "no
+            # payment requirements match registered schemes" — so an
+            # alias-configured notary quotes prices nobody can pay. Found by
+            # running a real client against it.
+            #
+            # A testnet, because the default public facilitator at x402.org
+            # advertises testnet kinds only; defaulting to mainnet would
+            # produce a notary that starts happily and fails every payment.
+            network=env.get("LETHE_NOTARY_NETWORK", "eip155:84532"),
             facilitator_url=env.get(
                 "LETHE_NOTARY_FACILITATOR", "https://x402.org/facilitator"
             ),
@@ -123,6 +169,7 @@ class PaymentConfig:
                 "LETHE_NOTARY_FREE=1 to run the notary without charging "
                 "(deliberately, not by accident)."
             )
+        check_network(self.network)
         check_pay_to(self.pay_to, self.network)
         if not self.facilitator_url.startswith("https://"):
             # The facilitator is told what was paid and settles it. Over plain
@@ -223,7 +270,7 @@ class PaymentGate:
         replace the whole payment mechanism with one object, and so the route
         reads as "charge, then do the work".
         """
-        from x402 import match_payload_to_requirements, parse_payment_payload
+        from x402 import match_payload_to_requirements
         from x402.http import (
             PAYMENT_REQUIRED_HEADER,
             PAYMENT_SIGNATURE_HEADER,
@@ -247,8 +294,25 @@ class PaymentGate:
             )
 
         try:
-            payload = parse_payment_payload(decode_payment_signature_header(header))
-            matched = match_payload_to_requirements(payload, requirements)
+            # decode_payment_signature_header already returns a PaymentPayload —
+            # do not parse it again. And match_payload_to_requirements is a
+            # THREE-argument predicate returning bool, not a lookup returning
+            # the matching requirement: it takes the protocol version, and both
+            # sides as dicts under their wire names. Getting either wrong is
+            # invisible until a real payment arrives, because a stub cannot
+            # disagree with itself — which is exactly how both survived here.
+            payload = decode_payment_signature_header(header)
+            version = getattr(payload, "x402_version", 2)
+            payload_wire = payload.model_dump(by_alias=True, mode="json")
+            matched = next(
+                (
+                    req for req in requirements
+                    if match_payload_to_requirements(
+                        version, payload_wire, req.model_dump(by_alias=True, mode="json")
+                    )
+                ),
+                None,
+            )
         except Exception as exc:
             # A malformed payment is the caller's to fix. It must not reach the
             # facilitator, and must not surface as a 500.

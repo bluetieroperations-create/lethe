@@ -170,7 +170,7 @@ from it, and every receipt already issued becomes unverifiable if it is lost.
 | `LETHE_NOTARY_KEY_FILE` | — | required |
 | `LETHE_NOTARY_PAY_TO` | — | required unless `LETHE_NOTARY_FREE=1` |
 | `LETHE_NOTARY_PRICE` | `$0.01` | |
-| `LETHE_NOTARY_NETWORK` | `base-sepolia` | see below |
+| `LETHE_NOTARY_NETWORK` | `eip155:84532` | CAIP-2 only — see below |
 | `LETHE_NOTARY_FACILITATOR` | `https://x402.org/facilitator` | must be https |
 | `LETHE_NOTARY_FREE` | unset | run without charging, deliberately |
 
@@ -180,13 +180,21 @@ deploy should not silently give the service away. A plaintext facilitator is
 refused. And a preflight asks the facilitator, at boot, whether it can actually
 settle the configured scheme and network.
 
+### Networks must be CAIP-2
+
+`eip155:8453`, not `base`. The server will build perfectly well-formed payment
+requirements from an alias, and the facilitator even advertises both forms —
+but a paying client normalizes to CAIP-2, finds no match, and refuses with *no
+payment requirements match registered schemes*. The notary looks healthy and
+nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
+
 ### Mainnet needs a different facilitator
 
 The default `https://x402.org/facilitator` advertises **testnet kinds only**
 (Base Sepolia and friends). That is why the default network is `base-sepolia`
 rather than `base`: a mainnet default would start cleanly and then fail every
 paid request. Point `LETHE_NOTARY_FACILITATOR` at a facilitator that settles
-mainnet before setting `LETHE_NOTARY_NETWORK=base`. The preflight will tell you
+mainnet before setting `LETHE_NOTARY_NETWORK=eip155:8453`. The preflight will tell you
 if you get this wrong:
 
 ```
@@ -259,9 +267,14 @@ arbitrated by a per-certificate lock inside the process. Running several notary
 workers against one witness database reopens the double-charge race. Run a
 single process, or move that arbitration into the database, before scaling out.
 
-**Not verified here:** an actually settled payment. That needs a funded wallet
-on the target network and a live facilitator, so the money movement itself is
-exercised only through an injected fake. Everything up to and including a
-genuine, decodable `PAYMENT-REQUIRED` header naming the right asset, amount and
-recipient runs against the real SDK. Settle a real testnet payment before
-taking money from anyone.
+**Verified against a real client:** `tests/test_payment_wire.py` (`-m live`)
+builds a genuine EIP-3009 payment with the x402 client SDK and drives it
+through the server's own charge path — decode, match, verify, settle. Two bugs
+lived in that gap until a real client was pointed at the server, because a
+stub cannot disagree with itself.
+
+**Still not verified:** an actually *settled* payment, which needs a funded
+wallet. Against an empty one the live facilitator returns
+`invalid_exact_evm_insufficient_balance` — the whole path works and the money
+is the only thing missing. Settle one testnet payment before taking money from
+anyone.
