@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $demo = $PSScriptRoot
 $repo = Split-Path -Parent (Split-Path -Parent $demo)
-$verifier = Join-Path (Split-Path -Parent $repo) "lethe-marketing\site\verify.html"
+$verifier = Join-Path $demo "verify.html"
 
 $activate = Join-Path $repo ".venv\Scripts\Activate.ps1"
 if (-not (Test-Path $activate)) {
@@ -29,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw "setup.py failed - check DEMO_DATABASE_URL and 
 if (Test-Path $verifier) {
     Start-Process $verifier
 } else {
-    Write-Warning "verifier page not found at $verifier - open lethe-marketing\site\verify.html manually"
+    Write-Warning "verifier page not found at $verifier - open verify.html in this directory manually"
 }
 
 Write-Host ""
