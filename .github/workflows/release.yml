@@ -100,9 +100,12 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     permissions:
-      # The ONLY permission this job gets. It cannot write to the repo, and it
-      # holds no long-lived secret: Trusted Publishing mints a token scoped to
-      # this one upload. `contents` is not granted at all.
+      # A job-level `permissions` block sets everything it does not list to
+      # `none`, so `contents: read` has to be spelled out or actions/checkout
+      # cannot fetch the repo (codeql.yml spells it out for the same reason).
+      contents: read
+      # Mints the short-lived PyPI token, and is the only write this job has.
+      # It cannot push to the repo, and there is no long-lived secret to leak.
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -125,7 +128,7 @@ jobs:
           python - <<'PY'
           import os, pathlib, sys
 
-          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
           names = sorted(p.name for p in pathlib.Path("dist").iterdir())
           print("built:", names)
           expected = {f"lethe_delete-{version}-py3-none-any.whl",

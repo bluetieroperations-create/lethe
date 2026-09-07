@@ -13,13 +13,20 @@ tag disagrees with what the repo says it is.
 
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z" <merge-commit-sha>
+   git tag --list vX.Y.Z                                    # must print the tag
    git push origin refs/tags/vX.Y.Z:refs/tags/vX.Y.Z
+   git ls-remote --tags origin vX.Y.Z                       # must print two lines
    ```
 
-   The explicit refspec is deliberate: a plain `git push origin vX.Y.Z` can
-   print `Everything up-to-date` and silently drop the ref when the push is
-   filtered, which is how v0.7.1 appeared to be tagged for half an hour
-   without being tagged at all.
+   **Check both times.** A tag push can fail in two quiet ways, and v0.7.1 hit
+   one of each before it landed. The tag can never have been created — a
+   `git tag` line that scrolled past in a multi-command paste leaves nothing to
+   push, and `git push` then reports success for the branch it did push. And a
+   push whose tag ref is filtered on the way out can print
+   `Everything up-to-date` while sending nothing. Neither prints an error, so
+   the local `git tag --list` and the remote `git ls-remote` are what tell you.
+   The explicit refspec is just being unambiguous about what is being pushed;
+   it is not itself a guarantee the ref arrived.
 
 The workflow then checks that the tag matches `lethe/version.py`, extracts the
 notes from the CHANGELOG (failing if that section is missing, empty, or still

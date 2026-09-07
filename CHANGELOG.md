@@ -26,10 +26,11 @@ that issued it.
 - **The documented install commands are pinned**, so they fail loudly instead
   of quietly serving a version from before certificate schema v3, the audit
   chain's `prev_hash` UNIQUE index, and the anchor credential-leak fix:
-  `pip install "lethe-delete>=0.7"` and `pip install "lethe-delete[mcp]>=0.6"`
-  (0.6.0 is where the mcp 2.x migration landed). `notary/README.md` now
-  installs `lethe-delete` from the repo root before the notary, which is the
-  sequence that actually works.
+  `pip install "lethe-delete>=0.7"` and `pip install "lethe-delete[mcp]>=0.7"`.
+  The mcp 2.x migration landed in the CHANGELOG's 0.6.0 section, but **0.6.0
+  was never tagged and has no release**, so 0.7 is the lowest floor a user can
+  actually install. `notary/README.md` now installs `lethe-delete` from the
+  repo root before the notary, which is the sequence that actually works.
 
 ### Added
 
