@@ -9,6 +9,46 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **`pip install lethe-delete` served 0.2.0 while the repo was at 0.7.1.**
+  Nothing published to PyPI after July; the Release workflow only ever created
+  a GitHub Release. The documented MCP install was broken the whole time as a
+  result: 0.2.0's `[mcp]` extra declares an unpinned `mcp>=1.9`, so
+  `pip install "lethe-delete[mcp]"` resolves `lethe-delete 0.2.0` **with
+  `mcp 2.2.0`** — verified — and `lethe/mcp.py` at 0.2.0 does
+  `from mcp.server.fastmcp import FastMCP`, a module 2.x renamed. Users got the
+  exact breakage 0.6.0 fixed. It also made `pip install ./notary` fail outright
+  with *no matching distribution*, since the notary requires
+  `lethe-delete>=0.7`.
+- **The documented install commands are pinned**, so they fail loudly instead
+  of quietly serving a version from before certificate schema v3, the audit
+  chain's `prev_hash` UNIQUE index, and the anchor credential-leak fix:
+  `pip install "lethe-delete>=0.7"` and `pip install "lethe-delete[mcp]>=0.7"`.
+  The mcp 2.x migration landed in the CHANGELOG's 0.6.0 section, but **0.6.0
+  was never tagged and has no release**, so 0.7 is the lowest floor a user can
+  actually install. `notary/README.md` now installs `lethe-delete` from the
+  repo root before the notary, which is the sequence that actually works.
+
+### Added
+
+- **The Release workflow publishes to PyPI**, from the same tag that creates
+  the GitHub Release. Trusted Publishing over OIDC — no API token in the repo,
+  in Actions secrets, or anywhere to leak — and no third-party action, for the
+  same reason the release step uses `gh` directly. The token is minted and
+  used inside one process, so it never crosses a step boundary. The job holds
+  `id-token: write` and nothing else; `contents: write` is now scoped to the
+  release job alone rather than granted workflow-wide.
+- A check that the **built artifacts** carry the tag's version, not just
+  `lethe/version.py`. The wheel is what gets uploaded, and a PyPI version can
+  never be re-uploaded.
+- **`docs/releasing.md`** — how to cut a release, the one-time PyPI Trusted
+  Publisher setup, and why pushing a tag needs the explicit
+  `refs/tags/X:refs/tags/X` refspec (a plain tag push can print
+  `Everything up-to-date` and drop the ref).
+
 ## [0.7.1] — 2026-09-07
 
 Everything in this release is in `notary/` and in CI. **The `lethe` package is

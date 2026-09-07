@@ -46,7 +46,7 @@ once and writes tag themselves.
 ## Quickstart (drop-in)
 
 ```bash
-pip install -e .            # from source for now (PyPI soon)
+pip install "lethe-delete>=0.7"      # or `pip install -e .` to work on it
 lethe keygen --out lethe_key.bin     # one-time: your signing key (prints the public key)
 export DATABASE_URL=...              # your own Postgres
 export LETHE_SALT=...                # a secret; pseudonymizes subjects in the ledger
@@ -183,7 +183,7 @@ proves far more against a third party than against the operator who issued it.
 Lethe ships an MCP server so autonomous agents can execute provable deletion
 and verify certificates machine-to-machine:
 
-    pip install "lethe-delete[mcp]"
+    pip install "lethe-delete[mcp]>=0.7"
     lethe-mcp
 
 Destructive deletes are two-step (preview → confirm token → forget), and any
@@ -237,6 +237,12 @@ operator's published public key to pin against). Full guide:
   unit tests against a fake `Index` plus a live integration test against real
   Pinecone (`pytest -m live`, needs `PINECONE_API_KEY`).
 - Roadmap: Weaviate, Qdrant, Redis, conversation logs.
+
+## Releasing
+
+Pushing a `vX.Y.Z` tag publishes both the GitHub Release and the PyPI package
+from that one tag, with the notes taken from the CHANGELOG so the two cannot
+tell different stories. See [docs/releasing.md](docs/releasing.md).
 
 ## License
 
