@@ -18,7 +18,7 @@ python search.py "senior React engineer in Berlin, fintech"   # Alice Chen surfa
 python forget.py alice.chen@demo.test                         # delete + write cert.json
 python search.py "senior React engineer in Berlin, fintech"   # Alice no longer appears
 ```
-Then open the verifier (`lethe-marketing/site/verify.html`), paste `cert.json`
+Then open the verifier (`verify.html`, in this directory — no server needed), paste `cert.json`
 + the printed public key → **VALID**. Tamper a field → **INVALID**.
 
 Run `python setup.py` again to reset between demos. Full talk-track in
