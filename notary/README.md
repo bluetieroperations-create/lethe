@@ -280,8 +280,13 @@ settlement that fails yields **402 and no receipt** — the settle response is
 the only thing that says money moved, and a receipt handed out over a failed
 settlement is the mirror of charging for nothing.
 
-**Still not verified:** an actually *settled* payment, which needs a funded
-wallet. Against an empty one the live facilitator returns
-`invalid_exact_evm_insufficient_balance` — the whole path works and the money
-is the only thing missing. Settle one testnet payment before taking money from
-anyone.
+**Settlement is verified.** A real payment has been settled end to end on Base
+Sepolia: the client signed an EIP-3009 authorization, the notary decoded it,
+matched it to its own requirements, and the facilitator moved 0.01 USDC from
+the buyer to the configured payee — transaction `0x27b42be68a…` in block
+46487830, method `TransferWithAuthorization`. Everything in this package has
+now been exercised against something real.
+
+Testnet, though. Mainnet needs a facilitator that settles it (see above), and
+the first mainnet payment deserves the same scrutiny: check the chain, not the
+`200`.
