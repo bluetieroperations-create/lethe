@@ -42,6 +42,9 @@ def main() -> int:
     ap.add_argument("--network", default=None,
                     help="CAIP-2 network to register (default: whatever the "
                          "notary quotes, read from /.well-known/notary)")
+    ap.add_argument("--out", default=None,
+                    help="where to write the receipt (default: "
+                         "receipt-<payload hash>.json in the working directory)")
     ap.add_argument("--timeout", type=float, default=60.0)
     args = ap.parse_args()
 
@@ -66,7 +69,7 @@ def main() -> int:
 
         first = http.post(f"{base}/notarize", json=certificate)
         if first.status_code != 402:
-            return _report(first)
+            return _report(first, args.out)
 
         # 402 carries the requirements in a header, not the body. Decoding it
         # needs x402[evm]; a bare x402 install fails here with an ImportError.
@@ -85,8 +88,17 @@ def main() -> int:
                   file=sys.stderr)
             return 2
 
-        required = decode_payment_required_header(
-            first.headers["PAYMENT-REQUIRED"])
+        # The requirements ride in a header, not the body. A 402 without it
+        # is a notary that cannot be paid — a proxy stripping the header, or a
+        # server that is not speaking x402 — and saying so beats a KeyError.
+        quote = first.headers.get("PAYMENT-REQUIRED")
+        if not quote:
+            print("the notary answered 402 but sent no PAYMENT-REQUIRED header, "
+                  "so there is nothing to pay. Check for a proxy stripping "
+                  "headers, or that this URL is really a notary.", file=sys.stderr)
+            return 2
+
+        required = decode_payment_required_header(quote)
         client = x402ClientSync()
         register_exact_evm_client(
             client, EthAccountSigner(Account.from_key(args.key)), networks=network)
@@ -98,10 +110,10 @@ def main() -> int:
             f"{base}/notarize", json=certificate,
             headers={PAYMENT_SIGNATURE_HEADER: encode_payment_signature_header(payload)},
         )
-        return _report(paid)
+        return _report(paid, args.out)
 
 
-def _report(response: httpx.Response) -> int:
+def _report(response: httpx.Response, out: str | None) -> int:
     body = response.json()
     print(f"\nHTTP {response.status_code}")
     if not body.get("ok"):
@@ -123,10 +135,25 @@ def _report(response: httpx.Response) -> int:
 
     receipt = body.get("receipt")
     if receipt:
-        out = "receipt.json"
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(receipt, f, indent=2)
-        print(f"\nreceipt written to {out} — this is the evidence, not the log entry")
+        # Named after the certificate, and never silently overwritten. A fixed
+        # "receipt.json" means buying a second certificate destroys the first
+        # receipt — and the receipt IS the evidence, so that is the one file
+        # this tool must not lose. (Measured: it did, before this.) Re-running
+        # the same certificate rewrites an identical file, because the notary
+        # returns the original receipt rather than minting a second one.
+        payload_hash = receipt.get("payload", {}).get("certificate_payload_hash", "")
+        path = out or f"receipt-{payload_hash[:16] or 'unknown'}.json"
+        serialized = json.dumps(receipt, indent=2)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                if f.read() != serialized:
+                    print(f"\n{path} already exists and holds a DIFFERENT receipt. "
+                          f"Refusing to overwrite it; pass --out to choose another "
+                          f"name.", file=sys.stderr)
+                    return 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(serialized)
+        print(f"\nreceipt written to {path} — this is the evidence, not the log entry")
 
     if body.get("charged"):
         print("\nRun this again with the same certificate. It must print "

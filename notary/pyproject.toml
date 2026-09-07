@@ -12,11 +12,13 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "click>=8.1",
-    # [evm] and [httpx], not bare x402: the payment path imports
-    # x402.http (HTTPFacilitatorClientSync) and
-    # x402.mechanisms.evm.exact.register, and both sit behind extras.
-    # Bare x402 installs cleanly, starts the notary, passes preflight in
-    # free mode — and raises ImportError on the first paid request.
+    # [evm] and [httpx], not bare x402. Measured on a clean venv:
+    #   bare x402      -> PaymentGate.server() raises ImportError,
+    #                     "EVM mechanism requires ethereum packages"
+    #   x402[evm] only -> preflight fails, "No module named 'httpx'"
+    # Either way the notary installs cleanly, starts, and cannot take a
+    # payment. Missing eth_utils (also under [evm]) additionally makes the
+    # EIP-55 check on LETHE_NOTARY_PAY_TO silently accept a mistyped payee.
     "x402[evm,httpx]>=2,<3",
 ]
 

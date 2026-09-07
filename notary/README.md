@@ -275,8 +275,10 @@ LETHE_TEST_DATABASE_URL=... pytest    # also runs the truncation scenario
 CI runs this suite on every push, alongside `ruff` and `mypy` over
 `lethe_notary/`, and a no-extras install job that imports the whole paid path.
 That last one exists because this package declared bare `x402` for three
-releases: it installs cleanly, starts, and raises `ImportError` on the first
-paid request, because `x402.http` and the EVM scheme live behind extras.
+releases: it installs cleanly, starts, and cannot take a payment — the EVM
+mechanism raises `ImportError`, and without `httpx` the facilitator call fails
+at preflight. Both were invisible locally, where those packages arrive
+transitively.
 
 ### Rate limits
 

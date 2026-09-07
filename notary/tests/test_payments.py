@@ -324,3 +324,32 @@ def test_a_free_notary_quotes_no_network_at_all(notary_signer, log, free_config)
     assert body["price"] is None
     assert body["network"] is None
     assert body["network_kind"] is None
+
+
+def test_the_settlement_reference_is_handed_back_to_the_payer(
+    notary_signer, log, free_config, operator
+):
+    """The transaction hash is the payer's only independent proof that the
+    money moved, and the operator's only handle for reconciling. v0.7.0 fixed
+    a bug where the settle result was discarded entirely; until this test, the
+    fix was guarded only by live-marked tests that CI never runs — mutating
+    `settlement = charged` to `settlement = None` left all 72 tests green."""
+    settlement = {"settlement_confirmed": True, "transaction": "0x" + "ab" * 32,
+                  "network": "eip155:84532", "payer": "0x" + "cd" * 20}
+
+    class SettlingGate:
+        enabled = True
+        config = free_config
+
+        def charge(self, request):
+            return dict(settlement)
+
+    app = create_app(signer=notary_signer, log=log, config=free_config)
+    app.state.notary.gate = SettlingGate()
+
+    with TestClient(app) as client:
+        body = client.post("/notarize",
+                           content=json.dumps(make_cert(operator))).json()
+
+    assert body["charged"] is True
+    assert body["payment"] == settlement

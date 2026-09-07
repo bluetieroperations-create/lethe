@@ -124,11 +124,11 @@ jobs:
 
   # The notary's own base install. Same lesson as base-install above, one
   # layer down: `pip install lethe-notary` declared bare x402, which installs
-  # cleanly, starts the service, and raises ImportError on the FIRST PAID
-  # REQUEST — because x402.http and x402.mechanisms.evm.exact.register both
-  # live behind extras. No unit test could catch it: the dev environment had
-  # eth_account and httpx pulled in transitively, so the imports always
-  # succeeded there.
+  # cleanly, starts the service, and fails on the FIRST PAID REQUEST. Measured
+  # on a clean venv: bare x402 raises ImportError from the EVM mechanism, and
+  # x402[evm] without httpx fails preflight with "No module named 'httpx'".
+  # No unit test could catch either: the dev environment had eth_account,
+  # eth_utils and httpx pulled in transitively, so it always worked there.
   notary-install:
     name: Notary install (no dev extras)
     runs-on: ubuntu-latest
@@ -161,8 +161,11 @@ jobs:
               "lethe_notary.cli",
               "x402",
               "x402.http",
+              # The two that a bare install does NOT get. x402.http imports
+              # fine without them, so listing it alone would prove nothing.
               "x402.mechanisms.evm.exact.register",
-              "eth_utils",  # the EIP-55 check silently no-ops without it
+              "httpx",      # the facilitator client needs it to make the call
+              "eth_utils",  # the EIP-55 payee check silently no-ops without it
           ]:
               importlib.import_module(name)
               print("ok", name)
@@ -192,6 +195,11 @@ jobs:
           lethe-notary --help > /dev/null
           lethe-notary serve --help > /dev/null
           echo "notary CLI ok"
+
+      # The documented acceptance path. It imports httpx at module scope, so
+      # this also fails if the [httpx] extra is ever dropped again.
+      - name: The buyer script must run
+        run: python notary/tools/pay.py --help > /dev/null
 
   test:
     runs-on: ubuntu-latest
