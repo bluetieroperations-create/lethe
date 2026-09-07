@@ -9,7 +9,12 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
-## [Unreleased]
+## [0.7.1] — 2026-09-07
+
+Everything in this release is in `notary/` and in CI. **The `lethe` package is
+unchanged from 0.7.0** — `git diff v0.7.0..v0.7.1 -- lethe/` is empty — so there
+is nothing to gain by upgrading `lethe-delete` itself. Upgrade if you run the
+notary: as declared, it could not take a payment on a clean install.
 
 ### Fixed
 
