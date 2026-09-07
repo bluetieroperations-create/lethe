@@ -30,7 +30,7 @@ def test_a_plaintext_facilitator_is_refused():
     an interceptable claim about money."""
     with pytest.raises(PaymentConfigError) as e:
         PaymentConfig.from_env({
-            "LETHE_NOTARY_PAY_TO": "0xabc",
+            "LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD",
             "LETHE_NOTARY_FACILITATOR": "http://facilitator.example",
         })
     assert "https" in str(e.value)
@@ -38,7 +38,7 @@ def test_a_plaintext_facilitator_is_refused():
 
 def test_a_configured_notary_reads_price_and_network():
     config = PaymentConfig.from_env({
-        "LETHE_NOTARY_PAY_TO": "0xabc", "LETHE_NOTARY_PRICE": "$0.05",
+        "LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD", "LETHE_NOTARY_PRICE": "$0.05",
         "LETHE_NOTARY_NETWORK": "base-sepolia",
     })
     assert (config.price, config.network, config.free_mode) == ("$0.05", "base-sepolia", False)
@@ -48,7 +48,7 @@ def test_the_default_network_is_one_the_default_facilitator_can_settle():
     """The public x402.org facilitator advertises testnet kinds only.
     Defaulting to mainnet would give a notary that starts cleanly and fails
     every paid request."""
-    assert PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": "0xabc"}).network == "base-sepolia"
+    assert PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": "0x000000000000000000000000000000000000dEaD"}).network == "base-sepolia"
 
 
 # -- the real 402 branch, against the actual SDK ----------------------------
@@ -121,7 +121,7 @@ class _FakeGate:
     def __init__(self, accept=True):
         self.accept = accept
         self.charges = 0
-        self.config = PaymentConfig(pay_to="0xabc", price="$0.01", network="base-sepolia",
+        self.config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01", network="base-sepolia",
                                     facilitator_url="https://x402.org/facilitator")
 
     def charge(self, request):
@@ -223,6 +223,56 @@ def test_witness_retrieval_and_discovery_are_never_charged(paid, operator):
 
 def test_gate_is_disabled_only_in_free_mode(free_config):
     assert PaymentGate(free_config).enabled is False
-    paid_config = PaymentConfig(pay_to="0xabc", price="$0.01", network="base-sepolia",
+    paid_config = PaymentConfig(pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01", network="base-sepolia",
                                 facilitator_url="https://x402.org/facilitator")
     assert PaymentGate(paid_config).enabled is True
+
+
+# -- a payee that cannot receive money --------------------------------------
+
+
+@pytest.mark.parametrize("bad", [
+    "<PAY_TO address>",     # the placeholder from the setup instructions
+    "0xdEaD",               # too short
+    "not-an-address",
+    "0x" + "g" * 40,        # not hex
+])
+def test_a_payee_that_cannot_receive_money_is_refused(bad):
+    """Found by running the real thing: LETHE_NOTARY_PAY_TO="<PAY_TO address>"
+    — the placeholder, left in verbatim — started the server, passed the
+    facilitator preflight, and quoted payments to a destination that does not
+    exist. Nothing complained until a customer had already signed.
+
+    A misconfigured payee is worse than none: it fails silently, and it fails
+    after taking someone's money."""
+    with pytest.raises(PaymentConfigError, match="not a valid address"):
+        PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": bad,
+                                "LETHE_NOTARY_NETWORK": "base-sepolia"})
+
+
+def test_a_transposed_character_is_caught_by_the_eip55_checksum():
+    """A mixed-case address carries a checksum, so one wrong character is
+    detectable — which is exactly the typo a human makes copying an address."""
+    good = "0xd3eD2dD9ff7e7783E8FD8Df1f4e9803b2B6C5151"
+    PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": good,
+                            "LETHE_NOTARY_NETWORK": "base-sepolia"})   # fine
+
+    with pytest.raises(PaymentConfigError, match="checksum"):
+        PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": good[:-1] + "2",
+                                "LETHE_NOTARY_NETWORK": "base-sepolia"})
+
+
+def test_an_all_lowercase_address_is_allowed():
+    """It carries no checksum to verify, so the shape check is all there is —
+    and refusing it would reject addresses people legitimately paste."""
+    PaymentConfig.from_env({
+        "LETHE_NOTARY_PAY_TO": "0xd3ed2dd9ff7e7783e8fd8df1f4e9803b2b6c5151",
+        "LETHE_NOTARY_NETWORK": "base-sepolia"})
+
+
+def test_a_non_evm_network_skips_the_evm_shape_check():
+    """Solana and friends use entirely different address formats; applying the
+    EVM rule there would reject every valid payee."""
+    PaymentConfig.from_env({
+        "LETHE_NOTARY_PAY_TO": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+        "LETHE_NOTARY_NETWORK": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"})

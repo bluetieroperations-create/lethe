@@ -19,6 +19,7 @@ worthless.
 """
 
 import os
+import re
 from dataclasses import dataclass
 
 from starlette.responses import JSONResponse
@@ -26,6 +27,52 @@ from starlette.responses import JSONResponse
 
 class PaymentConfigError(Exception):
     """The service was asked to charge but cannot be paid."""
+
+
+# An EVM address is 0x plus 20 hex bytes. Non-EVM chains (Solana, and others
+# x402 supports) use different formats entirely, so the shape check applies
+# only where it is meaningful.
+_EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_NON_EVM_PREFIXES = ("solana", "sui", "aptos", "stellar", "algorand", "near", "tron")
+
+
+def _looks_evm(network: str) -> bool:
+    return not network.lower().startswith(_NON_EVM_PREFIXES)
+
+
+def check_pay_to(pay_to: str, network: str) -> None:
+    """Reject an address that cannot possibly receive money.
+
+    Found the hard way: LETHE_NOTARY_PAY_TO="<PAY_TO address>" — the
+    placeholder from the setup instructions, left in verbatim — started the
+    server, passed the facilitator preflight, and quoted payments to a
+    destination that does not exist. Nothing complained until a customer had
+    already signed. A misconfigured payee is worse than no payee, because it
+    fails silently and it fails after taking someone's money.
+
+    Shape only: this cannot tell whether the operator owns the address, and it
+    does not try to. It catches placeholders, truncation and typos.
+    """
+    if not _looks_evm(network):
+        return
+    if not _EVM_ADDRESS.match(pay_to):
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PAY_TO={pay_to!r} is not a valid address for network "
+            f"{network!r}: expected 0x followed by 40 hex characters. Payments "
+            f"quoted to this destination could never be collected."
+        )
+    try:
+        from eth_utils import is_checksum_address, is_checksum_formatted_address
+    except ImportError:
+        return  # eth_utils ships with x402[evm]; the shape check stands alone.
+    # A mixed-case address carries an EIP-55 checksum, so a transposed
+    # character is detectable. An all-lower or all-upper address carries no
+    # checksum and cannot be checked this way.
+    if is_checksum_formatted_address(pay_to) and not is_checksum_address(pay_to):
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PAY_TO={pay_to!r} fails its EIP-55 checksum, which "
+            f"means a character is wrong. Copy the address again."
+        )
 
 
 @dataclass(frozen=True)
@@ -76,6 +123,7 @@ class PaymentConfig:
                 "LETHE_NOTARY_FREE=1 to run the notary without charging "
                 "(deliberately, not by accident)."
             )
+        check_pay_to(self.pay_to, self.network)
         if not self.facilitator_url.startswith("https://"):
             # The facilitator is told what was paid and settles it. Over plain
             # HTTP that is an interceptable claim about money.
