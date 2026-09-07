@@ -186,6 +186,7 @@ async def notarize(request):
         )
 
     payload_hash = cert["payload_hash"]
+    settlement = None
     async with notary.lock_for(payload_hash):
         try:
             prior = notary.log.existing(payload_hash)
@@ -201,9 +202,10 @@ async def notarize(request):
                 # dispute query, and /health. Measured before this change:
                 # four concurrent notarizations against a 0.3s facilitator
                 # took 1.23s, i.e. fully serialized.
-                paid, response = await run_in_threadpool(gate.charge, request)
+                paid, detail = await run_in_threadpool(gate.charge, request)
                 if not paid:
-                    return response
+                    return detail
+                settlement = detail
 
             try:
                 stored, is_new = notary.log.record(receipt)
@@ -238,10 +240,13 @@ async def notarize(request):
         finally:
             notary.release(payload_hash)
 
-    return JSONResponse({"ok": True, "receipt": stored,
-                         "already_witnessed": not is_new,
-                         "witness_recorded": witnessed,
-                         "charged": bool(gate.enabled and is_new)})
+    body = {"ok": True, "receipt": stored,
+            "already_witnessed": not is_new,
+            "witness_recorded": witnessed,
+            "charged": bool(gate.enabled and is_new)}
+    if settlement:
+        body["payment"] = settlement
+    return JSONResponse(body)
 
 
 async def challenge(request):

@@ -260,7 +260,10 @@ class PaymentGate:
     def charge(self, request) -> tuple[bool, object | None]:
         """Verify and settle a payment for this request.
 
-        Returns (paid, error_response). The shape is the protocol's: no
+        Returns (paid, detail). When paid is False, detail is the error
+        response to send. When paid is True, detail is the settlement record —
+        transaction hash, network, payer — which the caller echoes so the payer
+        has an on-chain reference and the operator can reconcile. The shape is the protocol's: no
         PAYMENT-SIGNATURE means answer 402 with the requirements encoded in
         PAYMENT-REQUIRED, and the client pays and retries. A present signature
         is decoded, matched against those requirements, verified with the
@@ -326,8 +329,26 @@ class PaymentGate:
             return False, _payment_error(
                 getattr(verified, "invalid_reason", None) or "payment did not verify")
 
-        server.settle_payment(payload, matched)
-        return True, None
+        settled = server.settle_payment(payload, matched)
+        # The settle response is the only thing that says money actually moved.
+        # Discarding it -- which this code did until a real payment went
+        # through and the 200 could not be distinguished from a 200 over a
+        # failed settlement -- means handing out a signed receipt for a payment
+        # that never landed. That is the mirror of charging for nothing, and it
+        # is the operator who eats it.
+        if not getattr(settled, "success", False):
+            reason = (getattr(settled, "error_reason", None)
+                      or getattr(settled, "error_message", None)
+                      or "settlement did not succeed")
+            return False, _payment_error(f"payment did not settle ({reason})")
+        return True, {
+            # Handed back so the payer has an on-chain reference for what they
+            # bought, and the operator can reconcile without trusting this
+            # service's own word for it.
+            "transaction": getattr(settled, "transaction", None),
+            "network": getattr(settled, "network", None),
+            "payer": getattr(settled, "payer", None),
+        }
 
 
 def _payment_error(message: str):

@@ -273,6 +273,13 @@ through the server's own charge path — decode, match, verify, settle. Two bugs
 lived in that gap until a real client was pointed at the server, because a
 stub cannot disagree with itself.
 
+A successful `/notarize` now returns a `payment` block with the settlement's
+transaction hash, network and payer, so the buyer has an on-chain reference and
+the operator can reconcile without taking this service's word for it. A
+settlement that fails yields **402 and no receipt** — the settle response is
+the only thing that says money moved, and a receipt handed out over a failed
+settlement is the mirror of charging for nothing.
+
 **Still not verified:** an actually *settled* payment, which needs a funded
 wallet. Against an empty one the live facilitator returns
 `invalid_exact_evm_insufficient_balance` — the whole path works and the money

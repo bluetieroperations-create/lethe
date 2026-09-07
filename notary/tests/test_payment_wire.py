@@ -65,9 +65,18 @@ class _AcceptingFacilitator:
         self.verified.append((payload, requirements))
         return type("V", (), {"is_valid": True, "invalid_reason": None})()
 
+    settle_succeeds = True
+
     def settle_payment(self, payload, requirements, *a, **kw):
         self.settled.append((payload, requirements))
-        return type("S", (), {"success": True})()
+        return type("S", (), {
+            "success": self.settle_succeeds,
+            "error_reason": None if self.settle_succeeds else "insufficient_funds",
+            "error_message": None,
+            "transaction": "0x" + "ab" * 32,
+            "network": NETWORK,
+            "payer": "0x" + "cd" * 20,
+        })()
 
 
 @pytest.mark.live
@@ -144,3 +153,59 @@ def test_the_default_network_is_the_caip2_form():
     """Not live: pins that the default a fresh operator gets is payable."""
     config = PaymentConfig.from_env({"LETHE_NOTARY_PAY_TO": PAYEE})
     assert config.network == NETWORK
+
+
+@pytest.mark.live
+def test_a_failed_settlement_yields_no_receipt(notary_signer, log, operator):
+    """settle_payment's response is the only thing that says money moved.
+    Discarding it -- which this code did until a real payment went through and
+    a 200 could not be told apart from a 200 over a failed settlement -- means
+    handing out a signed receipt for a payment that never landed. The mirror of
+    charging for nothing, and the operator eats it."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network=NETWORK,
+                           facilitator_url="https://x402.org/facilitator")
+    app = create_app(signer=notary_signer, log=log, config=config)
+    gate = app.state.notary.gate
+    real_server = gate.server()
+    fake = _AcceptingFacilitator(real_server)
+    fake.settle_succeeds = False
+    gate._server = fake
+
+    requirements = real_server.build_payment_requirements(gate.resource_config())
+    header = _signed_payment_header(
+        real_server.create_payment_required_response(requirements))
+
+    with TestClient(app) as client:
+        r = client.post("/notarize", content=json.dumps(make_cert(operator)),
+                        headers={"PAYMENT-SIGNATURE": header})
+
+    assert r.status_code == 402
+    assert r.json()["error"]["code"] == "PAYMENT_INVALID"
+    assert "did not settle" in r.json()["error"]["message"]
+    assert "insufficient_funds" in r.json()["error"]["message"]
+    # And nothing was witnessed for a payment that never landed.
+    assert app.state.notary.log.count() == 0
+
+
+@pytest.mark.live
+def test_a_settled_payment_returns_its_transaction(notary_signer, log, operator):
+    """The payer gets an on-chain reference for what they bought, and the
+    operator can reconcile without taking this service's word for it."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network=NETWORK,
+                           facilitator_url="https://x402.org/facilitator")
+    app = create_app(signer=notary_signer, log=log, config=config)
+    gate = app.state.notary.gate
+    real_server = gate.server()
+    gate._server = _AcceptingFacilitator(real_server)
+
+    requirements = real_server.build_payment_requirements(gate.resource_config())
+    header = _signed_payment_header(
+        real_server.create_payment_required_response(requirements))
+
+    with TestClient(app) as client:
+        r = client.post("/notarize", content=json.dumps(make_cert(operator)),
+                        headers={"PAYMENT-SIGNATURE": header})
+
+    assert r.status_code == 200
+    assert r.json()["payment"]["transaction"].startswith("0x")
+    assert r.json()["payment"]["network"] == NETWORK
