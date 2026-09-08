@@ -9,7 +9,14 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
-## [Unreleased]
+## [0.7.2] — 2026-09-08
+
+**The first release that reaches PyPI in over two months.** `pip install
+lethe-delete` has served 0.2.0 since July while the repo moved to 0.7.x; this
+tag is the one that closes that gap, and everything below exists to make sure
+it stays closed. The `lethe` package's code is unchanged from 0.7.0 —
+`git diff v0.7.0..v0.7.2 -- lethe/` is empty — so the value here is
+distribution, not new behaviour.
 
 ### Fixed
 
