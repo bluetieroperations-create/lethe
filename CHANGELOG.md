@@ -11,8 +11,28 @@ that issued it.
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/fleet-reset.md`** — a design note on a second target shape: restoring
+  a fleet of agents to an attested baseline, rather than deleting one data
+  subject's records. Nothing is built. It exists because
+  [arXiv:2608.10218](https://arxiv.org/abs/2608.10218) states the requirement
+  Lethe's spine would satisfy — contamination must be cleared from every agent
+  *at once*, or the ones still infected re-infect the ones just cleaned — and
+  because that question ("did we actually clean all of them, and can we show
+  it?") outlives the particular attack that raised it. The note is equally
+  clear about what not to do: the mitigation for that attack is free, so nobody
+  should sell protection from it, and a detector keyed on the paper's "viral
+  persona" would be semantic and should not be built.
+
 ### Fixed
 
+- **`tools/pay.py`'s evidence guard had no test.** The refusal to overwrite a
+  differing receipt was verified by hand against a live notary and then left
+  unguarded — on the one file the tool exists to protect. Seven tests now cover
+  it; reverting to the old fixed `receipt.json` fails four of them, and
+  deleting the overwrite check fails the one that matters. `notary/tools` is
+  also type-checked in CI now, which it was not.
 - **A failed PyPI publish no longer costs a version number.** The Release
   workflow takes a `workflow_dispatch` with a tag input that runs only the
   publish job, checked out at that tag, leaving the existing GitHub Release

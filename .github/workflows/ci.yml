@@ -38,7 +38,10 @@ jobs:
       - name: Ruff
         run: python -m ruff check lethe tests notary
       - name: Mypy
-        run: python -m mypy lethe notary/lethe_notary
+        # notary/tools too: pay.py is the documented acceptance path for the
+        # idempotency guarantee, so it runs on customers' machines against real
+        # money. It was type-clean by hand and nothing was keeping it that way.
+        run: python -m mypy lethe notary/lethe_notary notary/tools
 
   # Exactly what `pip install lethe-delete` gives a user: no extras, no dev
   # dependencies. v0.3.0 shipped with the documented verification API
