@@ -47,10 +47,13 @@ Run the workflow by hand instead, against the tag that failed:
 
 That skips the Release job entirely and runs only the PyPI publish, checked out
 at that tag. No new version number is needed, and the existing Release is left
-alone. The tag is validated (`vN…` only) and the built artifacts still have to
-carry that tag's version, which is what keeps the hand-run path as safe as the
-automatic one — the tag-vs-`version.py` gate lives in the Release job, and on
-this path that job does not run.
+alone.
+
+The tag-vs-`version.py` gate lives in the Release job, which this path skips, so
+the publish job carries three of its own: the input must look like a release tag
+(`vN…`), the checkout must actually be sitting on that tag's commit, and the
+built artifacts must carry that tag's version. Together they keep the hand-run
+path as safe as the automatic one.
 
 ## PyPI, one-time setup
 

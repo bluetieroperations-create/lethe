@@ -19,9 +19,12 @@ that issued it.
   alone. Before this, the sole retry was a fresh tag, because
   `gh release create` refuses an existing release — so v0.7.2's failed upload
   would have had to become v0.7.3. The hand-run path keeps its guards: the tag
-  must look like a release tag, and the built artifacts must carry that tag's
-  version, which is what replaces the tag-vs-`version.py` check that lives in
-  the skipped Release job.
+  must look like a release tag, the checkout must be sitting on that tag's
+  commit, and the built artifacts must carry that tag's version — three checks
+  replacing the tag-vs-`version.py` gate that lives in the skipped Release job.
+  The publish job is also gated on `!cancelled()` rather than `always()`:
+  `always()` runs through a cancelled workflow, and cancelling is the only stop
+  button there is on a step that cannot be undone.
 - **The publish step prints what PyPI actually said.** Its 422 body names the
   claim that did not match; the first version swallowed it and guessed, so
   v0.7.2 reported a guess. (The guess was wrong twice over: the message blamed

@@ -117,7 +117,13 @@ jobs:
     # `needs` on a skipped job skips this one too, so the dispatch path has to
     # say so explicitly. Success or skipped — never after a FAILED release,
     # which would mean the tag gate or the notes did not pass.
-    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    #
+    # !cancelled(), not always(): always() runs even when the workflow has been
+    # cancelled, and cancelling is the one stop button there is on the only
+    # step here that cannot be undone.
+    if: >-
+      !cancelled()
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
     # On a tag push this is the tag; on a dispatch, GITHUB_REF_NAME is the
     # branch the workflow was launched from, so the input is what counts.
@@ -144,7 +150,29 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          # One source of truth with RELEASE_TAG above. Spelling the expression
+          # out twice meant the job could build one tree and label it another
+          # if the copies ever drifted, and the artifact check below would only
+          # notice when the versions happened to differ.
+          ref: ${{ env.RELEASE_TAG }}
+
+      # Belt and braces on that: prove the working tree IS the tag before
+      # anything is built from it. This also catches a `ref:` that silently
+      # resolved to nothing, which checks out the default branch rather than
+      # failing. Verified against all four cases, including a branch HEAD while
+      # RELEASE_TAG named a tag.
+      - name: The checkout must be at that tag
+        run: |
+          head="$(git rev-parse HEAD)"
+          want="$(git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}" || true)"
+          if [ -z "$want" ]; then
+            echo "::error::tag $RELEASE_TAG is not present after checkout"; exit 1
+          fi
+          if [ "$head" != "$want" ]; then
+            echo "::error::HEAD is $head, but $RELEASE_TAG is $want - wrong tree checked out"
+            exit 1
+          fi
+          echo "checked out $RELEASE_TAG ($head)"
 
       - uses: actions/setup-python@v7
         with:
