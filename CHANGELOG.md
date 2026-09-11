@@ -27,6 +27,12 @@ that issued it.
 
 ### Fixed
 
+- **`tools/pay.py`'s evidence guard had no test.** The refusal to overwrite a
+  differing receipt was verified by hand against a live notary and then left
+  unguarded — on the one file the tool exists to protect. Seven tests now cover
+  it; reverting to the old fixed `receipt.json` fails four of them, and
+  deleting the overwrite check fails the one that matters. `notary/tools` is
+  also type-checked in CI now, which it was not.
 - **A failed PyPI publish no longer costs a version number.** The Release
   workflow takes a `workflow_dispatch` with a tag input that runs only the
   publish job, checked out at that tag, leaving the existing GitHub Release
