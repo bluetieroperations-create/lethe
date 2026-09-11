@@ -34,6 +34,24 @@ marked unreleased), publishes the GitHub Release, and only then uploads to
 PyPI — the GitHub Release can be redone, a PyPI version can never be
 re-uploaded, so the irreversible step goes last.
 
+## Retrying a failed PyPI publish
+
+The GitHub Release and the PyPI upload are separate jobs, and only the second
+one can fail on its own. When it does, the Release already exists, so re-running
+the workflow is not an option — `gh release create` refuses a release that is
+already there.
+
+Run the workflow by hand instead, against the tag that failed:
+
+**Actions → Release → Run workflow**, and enter the tag (`v0.7.2`).
+
+That skips the Release job entirely and runs only the PyPI publish, checked out
+at that tag. No new version number is needed, and the existing Release is left
+alone. The tag is validated (`vN…` only) and the built artifacts still have to
+carry that tag's version, which is what keeps the hand-run path as safe as the
+automatic one — the tag-vs-`version.py` gate lives in the Release job, and on
+this path that job does not run.
+
 ## PyPI, one-time setup
 
 Uploads use **Trusted Publishing**: GitHub proves the workflow's identity over
@@ -53,8 +71,14 @@ GitHub publisher:
 Leave Environment blank unless you also add `environment:` to the `pypi` job —
 PyPI matches on it when set, and a mismatch fails every publish.
 
-If it is not configured, the publish step says so by name rather than dying on
-a 403.
+If it does not match, the publish step prints **PyPI's own response body**,
+which names the claim that failed, and fails before `twine upload` — nothing
+half-publishes.
+
+The trap worth knowing in advance: **Workflow name is the filename**,
+`release.yml`. Entering `Release` — the name at the top of the workflow, and the
+name shown in the Actions tab — produces a publisher that never matches, and a
+422 on every publish. v0.7.2's first attempt failed exactly here.
 
 ## Why this exists
 

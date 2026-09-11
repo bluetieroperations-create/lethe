@@ -6,13 +6,29 @@ on:
   push:
     tags: ["v*"]
 
+  # Retry a PyPI publish for a tag that already has its GitHub Release.
+  # Without this the only retry is a fresh tag, because `gh release create`
+  # refuses an existing release — so every failed upload burned a version
+  # number. v0.7.2's first attempt failed at the credential step with the
+  # GitHub Release already published; this is how it gets finished rather
+  # than abandoned.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish to PyPI, e.g. v0.7.2. The GitHub Release is not touched."
+        required: true
+        type: string
+
 # Least privilege, set per job: only `release` writes to the repo, and the
 # job that holds a PyPI credential holds nothing else.
 permissions:
   contents: read
 
 jobs:
+  # Tag pushes only. A workflow_dispatch is a PyPI retry for a tag whose
+  # Release already exists, so recreating it would just fail.
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,7 +114,15 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: release
+    # `needs` on a skipped job skips this one too, so the dispatch path has to
+    # say so explicitly. Success or skipped — never after a FAILED release,
+    # which would mean the tag gate or the notes did not pass.
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
+    # On a tag push this is the tag; on a dispatch, GITHUB_REF_NAME is the
+    # branch the workflow was launched from, so the input is what counts.
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     permissions:
       # A job-level `permissions` block sets everything it does not list to
       # `none`, so `contents: read` has to be spelled out or actions/checkout
@@ -108,7 +132,19 @@ jobs:
       # It cannot push to the repo, and there is no long-lived secret to leak.
       id-token: write
     steps:
+      # A tag, always. Reject anything else before it reaches checkout: this
+      # job holds the minting credential, and what it builds is what gets
+      # published under that version forever.
+      - name: The tag must look like a release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*) echo "publishing $RELEASE_TAG" ;;
+            *) echo "::error::RELEASE_TAG='$RELEASE_TAG' is not a vN.N.N tag"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - uses: actions/setup-python@v7
         with:
@@ -128,7 +164,7 @@ jobs:
           python - <<'PY'
           import os, pathlib, sys
 
-          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          version = os.environ["RELEASE_TAG"].removeprefix("v")
           names = sorted(p.name for p in pathlib.Path("dist").iterdir())
           print("built:", names)
           expected = {f"lethe_delete-{version}-py3-none-any.whl",
@@ -166,13 +202,30 @@ jobs:
               token = post("https://pypi.org/_/oidc/mint-token", {"token": oidc},
                            {"Content-Type": "application/json"})["token"]
           except urllib.error.HTTPError as exc:
-              sys.exit(
-                  f"PyPI refused to mint an upload token ({exc.code}). The most "
-                  f"likely cause is that no Trusted Publisher is configured for "
-                  f"lethe-delete: add publisher bluetieroperations-create/lethe, "
-                  f"workflow release.yml, environment blank, at "
-                  f"https://pypi.org/manage/project/lethe-delete/settings/publishing/"
+              # PRINT WHAT PYPI SAID. Its body names the claim that did not
+              # match; the first version of this swallowed it and guessed, so a
+              # 422 on v0.7.2 said "probably not configured" when a publisher
+              # was configured and one field was wrong. One failed run should be
+              # enough to know which field.
+              body = exc.read().decode("utf-8", "replace").strip()[:2000]
+              hint = (
+                  "422 means PyPI has publishers but none match this run's "
+                  "claims. Check, in this order: Workflow name must be the "
+                  "FILENAME `release.yml`, not the display name `Release`; "
+                  "Environment must be blank, because this job declares none; "
+                  "Owner `bluetieroperations-create`, Repository `lethe`, bare "
+                  "names with no URL or .git."
+                  if exc.code == 422 else
+                  "Add a publisher: owner bluetieroperations-create, repository "
+                  "lethe, workflow release.yml, environment blank."
               )
+              sys.exit(
+                  f"PyPI refused to mint an upload token (HTTP {exc.code}).\n"
+                  f"PyPI said: {body}\n\n{hint}\n"
+                  f"Settings: https://pypi.org/manage/project/lethe-delete/settings/publishing/"
+              )
+          except urllib.error.URLError as exc:
+              sys.exit(f"Could not reach PyPI to mint a token: {exc.reason}")
 
           # Keep it out of the log even if twine echoes it back on an error.
           print(f"::add-mask::{token}")

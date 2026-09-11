@@ -9,6 +9,26 @@ independent of the package version. **Every certificate schema remains
 verifiable by later releases** — a certificate is meant to outlive the code
 that issued it.
 
+## [Unreleased]
+
+### Fixed
+
+- **A failed PyPI publish no longer costs a version number.** The Release
+  workflow takes a `workflow_dispatch` with a tag input that runs only the
+  publish job, checked out at that tag, leaving the existing GitHub Release
+  alone. Before this, the sole retry was a fresh tag, because
+  `gh release create` refuses an existing release — so v0.7.2's failed upload
+  would have had to become v0.7.3. The hand-run path keeps its guards: the tag
+  must look like a release tag, and the built artifacts must carry that tag's
+  version, which is what replaces the tag-vs-`version.py` check that lives in
+  the skipped Release job.
+- **The publish step prints what PyPI actually said.** Its 422 body names the
+  claim that did not match; the first version swallowed it and guessed, so
+  v0.7.2 reported "probably not configured" when a publisher *was* configured
+  and one field was wrong. The most common cause — entering the workflow's
+  display name `Release` instead of the filename `release.yml` — is now named
+  in the error and in `docs/releasing.md`.
+
 ## [0.7.2] — 2026-09-08
 
 **The first release that reaches PyPI in over two months.** `pip install
