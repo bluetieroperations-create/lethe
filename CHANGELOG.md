@@ -11,6 +11,20 @@ that issued it.
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/fleet-reset.md`** — a design note on a second target shape: restoring
+  a fleet of agents to an attested baseline, rather than deleting one data
+  subject's records. Nothing is built. It exists because
+  [arXiv:2608.10218](https://arxiv.org/abs/2608.10218) states the requirement
+  Lethe's spine would satisfy — contamination must be cleared from every agent
+  *at once*, or the ones still infected re-infect the ones just cleaned — and
+  because that question ("did we actually clean all of them, and can we show
+  it?") outlives the particular attack that raised it. The note is equally
+  clear about what not to do: the mitigation for that attack is free, so nobody
+  should sell protection from it, and a detector keyed on the paper's "viral
+  persona" would be semantic and should not be built.
+
 ### Fixed
 
 - **A failed PyPI publish no longer costs a version number.** The Release
