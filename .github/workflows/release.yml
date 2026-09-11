@@ -208,16 +208,20 @@ jobs:
               # was configured and one field was wrong. One failed run should be
               # enough to know which field.
               body = exc.read().decode("utf-8", "replace").strip()[:2000]
+              # 422 covers BOTH "no publishers at all" and "publishers, none
+              # matching" — v0.7.2 failed with zero configured, so do not claim
+              # one exists. Start by looking at the page.
               hint = (
-                  "422 means PyPI has publishers but none match this run's "
-                  "claims. Check, in this order: Workflow name must be the "
-                  "FILENAME `release.yml`, not the display name `Release`; "
+                  "422 means no configured publisher matched this run — which "
+                  "includes having none at all. Open the settings page below "
+                  "and check: is a publisher listed? Then Workflow name must be "
+                  "the FILENAME `release.yml`, not the display name `Release`; "
                   "Environment must be blank, because this job declares none; "
                   "Owner `bluetieroperations-create`, Repository `lethe`, bare "
                   "names with no URL or .git."
                   if exc.code == 422 else
-                  "Add a publisher: owner bluetieroperations-create, repository "
-                  "lethe, workflow release.yml, environment blank."
+                  "Check the publisher: owner bluetieroperations-create, "
+                  "repository lethe, workflow release.yml, environment blank."
               )
               sys.exit(
                   f"PyPI refused to mint an upload token (HTTP {exc.code}).\n"

@@ -24,10 +24,12 @@ that issued it.
   the skipped Release job.
 - **The publish step prints what PyPI actually said.** Its 422 body names the
   claim that did not match; the first version swallowed it and guessed, so
-  v0.7.2 reported "probably not configured" when a publisher *was* configured
-  and one field was wrong. The most common cause — entering the workflow's
-  display name `Release` instead of the filename `release.yml` — is now named
-  in the error and in `docs/releasing.md`.
+  v0.7.2 reported a guess. (The guess was wrong twice over: the message blamed
+  a missing publisher, and a later revision blamed a mismatched one — the page
+  showed *no publishers configured at all*, which a 422 also covers and the
+  hint now says.) The trap worth naming in advance — entering the workflow's
+  display name `Release` instead of the filename `release.yml` — is in the
+  error and in `docs/releasing.md`.
 
 ## [0.7.2] — 2026-09-08
 
