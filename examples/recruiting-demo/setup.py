@@ -1,6 +1,6 @@
 """Seed the demo: a `candidates` table with embeddings, tagged in Lethe for
 deletion. Run once before the demo. Env: DEMO_DATABASE_URL (Postgres + pgvector),
-DEMO_SALT (default 'demo-salt'), DEMO_KEY_FILE (default 'demo_key.bin')."""
+DEMO_SALT (required, no default), DEMO_KEY_FILE (default 'demo_key.bin')."""
 
 import os
 
@@ -22,18 +22,53 @@ def _key_file():
     return os.environ.get("DEMO_KEY_FILE", "demo_key.bin")
 
 
+def _salt():
+    """The salt has no default, deliberately.
+
+    Subjects are stored in the ledger as HMACs under it, so it is a secret — and
+    a committed default is not a secret: every deployment that copied this demo
+    would share it. The demo is the first code a prospect reads, so it should
+    model the habit the library expects (`Lethe(salt=...)` is required too).
+
+    It must also stay the SAME for the whole demo session. Seeding under one
+    salt and forgetting under another hashes the subject to something the ledger
+    has never seen. Lethe handles that honestly — measured: `records_deleted=0`,
+    `all_verified=False`, and the certificate refuses to call it an erasure — so
+    nothing is silently wrong. But mid-demo it reads as the product failing, and
+    the candidate stays in the index while you are pointing at the screen.
+    """
+    salt = os.environ.get("DEMO_SALT")
+    if not salt:
+        raise SystemExit(
+            "DEMO_SALT is not set.\n"
+            "  It pseudonymizes subjects in the ledger, so there is no default.\n"
+            "  Any throwaway value works — but keep the SAME one for the whole\n"
+            "  demo: seeding and forgetting under different salts finds nothing\n"
+            "  to delete and reports records_deleted=0, all_verified=False.\n"
+            "    PowerShell:  $env:DEMO_SALT = \"my-demo-salt\"\n"
+            "    bash:        export DEMO_SALT=my-demo-salt\n"
+            "  start-demo.ps1 generates one and prints it for you."
+        )
+    return salt
+
+
 def build_lethe(conn):
     with open(_key_file(), "rb") as f:
         signer = Signer.from_private_bytes(f.read())
     return Lethe(
         ledger=Ledger(conn), audit=AuditLog(conn), signer=signer,
         connectors={"pgvector": PgVectorConnector(conn)},
-        salt=os.environ.get("DEMO_SALT", "demo-salt"),
+        salt=_salt(),
     )
 
 
 def main():
     url = os.environ["DEMO_DATABASE_URL"]
+    # Validated before anything is created. build_lethe() would catch a missing
+    # salt anyway, but only after the signing key had been written to disk — so
+    # a run that fails for a missing environment variable would still leave a
+    # key behind, and a failed run should be a no-op.
+    _salt()
     kf = _key_file()
     if not os.path.exists(kf):
         s = Signer.generate()

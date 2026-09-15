@@ -21,7 +21,16 @@ Set-Location $demo
 if (-not $env:DEMO_DATABASE_URL) {
     $env:DEMO_DATABASE_URL = Read-Host "DEMO_DATABASE_URL (throwaway Postgres + pgvector, e.g. Neon)"
 }
-if (-not $env:DEMO_SALT) { $env:DEMO_SALT = "demo-salt" }
+if (-not $env:DEMO_SALT) {
+    # No committed default: the salt pseudonymizes subjects in the ledger.
+    # Generated per session and PRINTED, because setup.py and forget.py must
+    # use the same one - a second shell needs this value, not a fresh one.
+    # A GUID is plenty for a throwaway demo over synthetic data; it is not a
+    # recipe for generating a production secret.
+    $env:DEMO_SALT = [guid]::NewGuid().ToString("N")
+    Write-Host "Generated DEMO_SALT for this session: $env:DEMO_SALT" -ForegroundColor Yellow
+    Write-Host "  Running the demo from another shell? Set the same value there." -ForegroundColor DarkGray
+}
 
 python setup.py
 if ($LASTEXITCODE -ne 0) { throw "setup.py failed - check DEMO_DATABASE_URL and that the venv has lethe installed" }
