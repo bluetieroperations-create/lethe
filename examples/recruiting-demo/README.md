@@ -8,7 +8,8 @@ Data is fake — you never touch a prospect's real data.
 ```bash
 cd examples/recruiting-demo
 export DEMO_DATABASE_URL='<Postgres + pgvector — a throwaway Neon DB works>'
-# optional: export DEMO_SALT=demo-salt   DEMO_KEY_FILE=demo_key.bin
+export DEMO_SALT='<any throwaway value>'   # required — keep it set for the whole demo
+# optional: export DEMO_KEY_FILE=demo_key.bin
 python setup.py        # seeds candidates, generates a signing key, prints the public key
 ```
 
@@ -20,6 +21,12 @@ python search.py "senior React engineer in Berlin, fintech"   # Alice no longer 
 ```
 Then open the verifier (`verify.html`, in this directory — no server needed), paste `cert.json`
 + the printed public key → **VALID**. Tamper a field → **INVALID**.
+
+`DEMO_SALT` has no default on purpose: subjects are stored as HMACs under it,
+so it is a secret, and a committed one is not. Keep the same value for the whole
+session: seeding under one salt and forgetting under another finds nothing to
+delete and reports `records_deleted=0, all_verified=False` — honest, but it reads
+as a broken demo. `start-demo.ps1` generates one and prints it.
 
 Run `python setup.py` again to reset between demos. Full talk-track for a
 live call in [`RUNBOOK.md`](RUNBOOK.md); the shot list for the silent 90-second
