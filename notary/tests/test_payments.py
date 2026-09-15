@@ -353,3 +353,24 @@ def test_the_settlement_reference_is_handed_back_to_the_payer(
 
     assert body["charged"] is True
     assert body["payment"] == settlement
+
+
+def test_free_mode_and_a_payee_together_are_refused():
+    """Two contradictory intents. Letting either win silently is how a paid
+    service gives itself away — an operator with a stale FREE=1 in the
+    environment who sets PAY_TO would serve for free and never be told.
+
+    Same shape as the half-set credential pair that fell through to a working
+    keyless facilitator in the Blackwall billing session: the config expressed
+    a cutover, the code picked the other branch, and nothing said so."""
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig.from_env({"LETHE_NOTARY_FREE": "1",
+                                "LETHE_NOTARY_PAY_TO": PAYEE})
+    assert "opposite instructions" in str(e.value)
+
+
+def test_free_mode_alone_is_still_allowed():
+    """The guard must not break the legitimate case it sits next to."""
+    config = PaymentConfig.from_env({"LETHE_NOTARY_FREE": "1"})
+    assert config.free_mode is True
+    assert config.pay_to is None

@@ -198,6 +198,22 @@ class PaymentConfig:
 
     def check(self) -> None:
         if self.free_mode:
+            # FREE=1 and a payee together are two contradictory intents, and
+            # letting either win silently is how a paid service gives itself
+            # away. The mirror of the missing-PAY_TO case below: that one
+            # refuses to start rather than quietly charge nothing; this one
+            # refuses rather than quietly ignore a payee the operator went to
+            # the trouble of configuring. Found by the Blackwall billing
+            # session's report of the same shape — a half-set credential pair
+            # that fell through to a working keyless facilitator, so the
+            # operator believed they had cut over and had not.
+            if self.pay_to:
+                raise PaymentConfigError(
+                    "LETHE_NOTARY_FREE=1 and LETHE_NOTARY_PAY_TO are both set. "
+                    "Those are opposite instructions: one says charge nobody, "
+                    "the other names who to pay. Refusing rather than guessing "
+                    "— unset whichever one you did not mean."
+                )
             return
         if not self.pay_to:
             raise PaymentConfigError(

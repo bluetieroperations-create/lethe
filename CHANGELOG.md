@@ -27,6 +27,26 @@ that issued it.
 
 ### Fixed
 
+- **`LETHE_NOTARY_FREE=1` silently won over a configured `LETHE_NOTARY_PAY_TO`.**
+  Two contradictory instructions — charge nobody, and here is who to pay — and
+  the code picked one without saying so, giving the service away to an operator
+  with a stale `FREE=1` in the environment. Now refused at startup. Found from a
+  sibling project's report of the same shape: a half-set credential pair that
+  fell through to a *working* facilitator, so the operator believed a cutover had
+  happened when it had not.
+- **`notary/README.md` said going to mainnet was a URL swap. It is not.** The
+  facilitator that settles Base mainnet requires an authenticated request (EdDSA
+  Bearer JWT, per call), and the notary sends no credential, so the documented
+  advice produced a 401. The section now says mainnet needs code, names the seam
+  that makes it small (`FacilitatorConfig(auth_provider=…)`), and records that
+  CDP's `/supported` answers 401 — so the existing preflight catches this at
+  boot rather than at the first customer, which is luck rather than design and
+  is now labelled as such. The facilitator claim in that section is now this
+  repo's own probe — a table of what `x402.org/facilitator` and
+  `facilitator.x402.rs` actually list — rather than a sibling project's
+  summary. Their wording said "every EVM network they settle is a testnet";
+  several of the 12 `eip155:*` ids are chains we could not identify, so
+  repeating it would have been a guess dressed as a measurement.
 - **`tools/pay.py`'s evidence guard had no test.** The refusal to overwrite a
   differing receipt was verified by hand against a live notary and then left
   unguarded — on the one file the tool exists to protect. Seven tests now cover
