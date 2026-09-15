@@ -197,10 +197,35 @@ nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
 ### Going to mainnet
 
 The default is Base Sepolia — `eip155:84532` — and it is a testnet on purpose.
-The default `https://x402.org/facilitator` advertises **testnet kinds only**,
-so a mainnet default would start cleanly and fail every paid request.
 
-Switching is two variables, and they must move together:
+**A URL swap is not enough, and this section used to say otherwise.** Measured
+2026-09-15:
+
+> `facilitator.x402.rs` (31 kinds) and `x402.org/facilitator` (11 kinds) list no
+> `eip155:8453` in `/supported` — every EVM network they settle is a testnet.
+> Coinbase CDP is a facilitator that settles Base mainnet. This is not a claim
+> that *no* keyless facilitator settles mainnet: at least one does.
+
+CDP requires an authenticated request — an `EdDSA` Bearer JWT, minted per call,
+bound to method, host and path, with a 120-second TTL. Setting
+`LETHE_NOTARY_FACILITATOR` to it and nothing else gets you a **401**, because
+the notary sends no credential.
+
+What that costs you is a startup failure rather than a production one, which is
+the one piece of luck here. CDP's `/supported` answers **401** to an
+unauthenticated caller, and the preflight calls it before the notary serves
+anything — so a credential-less mainnet config dies at boot, not at your first
+customer. Do not rely on that for every facilitator: one whose `/supported` is
+public but whose `/settle` is not would pass preflight and fail on the first
+payment.
+
+**Mainnet is therefore not a configuration change today — it needs code.** The
+seam exists: `x402`'s `FacilitatorConfig` takes an `auth_provider`, and
+`x402.http` ships `CreateHeadersAuthProvider`, so the JWT minting plugs in
+without forking the SDK. `PaymentGate.server()` would need to construct and pass
+one. Until that lands, run on testnet.
+
+Two variables still have to move together once it does:
 
 ```bash
 export LETHE_NOTARY_NETWORK=eip155:8453          # Base mainnet
