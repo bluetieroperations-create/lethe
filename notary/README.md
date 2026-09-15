@@ -179,6 +179,7 @@ from it, and every receipt already issued becomes unverifiable if it is lost.
 | `LETHE_NOTARY_NETWORK` | `eip155:84532` | CAIP-2 only — see below |
 | `LETHE_NOTARY_FACILITATOR` | `https://x402.org/facilitator` | must be https |
 | `LETHE_NOTARY_FREE` | unset | run without charging, deliberately |
+| `LETHE_NOTARY_PUBLIC_URL` | unset | the origin this notary answers on; publishes a catalogable resource identity — see below |
 
 It **fails to start** rather than serve wrongly: no `PAY_TO` and no explicit
 `FREE=1` is a startup error, because one missing environment variable on a
@@ -193,6 +194,46 @@ requirements from an alias, and the facilitator even advertises both forms —
 but a paying client normalizes to CAIP-2, finds no match, and refuses with *no
 payment requirements match registered schemes*. The notary looks healthy and
 nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
+
+### Being catalogable
+
+A paid x402 service is indexed by catalogs from its **402 challenge**. Set the
+origin the notary answers on and the challenge grows a resource identity:
+
+```bash
+export LETHE_NOTARY_PUBLIC_URL=https://notary.example.com
+```
+
+The 402 then carries `resource` (an absolute URL), `extensions.bazaar.info` and
+`extensions.bazaar.schema` — the three fields present on every one of 2000
+catalogued entries sampled on 2026-09-15. Without it the 402 is still valid
+x402 and the notary works normally; it simply cannot be catalogued. Publishing
+a guessed origin would be worse than publishing none.
+
+**The resource url is never taken from the request, and that is deliberate.**
+A sibling x402 service measured the alternative live on 2026-09-15: it echoed a
+client-supplied `resource` back into its 402, so an attacker could pay the
+minimum with `resource=https://evil.example/owned` and get **their** url
+catalogued **against the victim's payout address** — borrowing a settlement
+history for the price of one call, and publishing a `javascript:` URL into a
+catalog UI on the way.
+
+The notary cannot be used that way, for reasons that stack:
+
+* It sells exactly **one** resource, so the path is a constant (`/notarize`),
+  not a request parameter. There is no field to echo.
+* The origin comes from `LETHE_NOTARY_PUBLIC_URL`, never from the request — not
+  from `Host`, not from `X-Forwarded-Host`. A spoofed `Host` changes nothing.
+* The certificate schema is closed (`additionalProperties: false`), so a
+  request carrying a `resource` key is rejected before anything else runs.
+
+`LETHE_NOTARY_PUBLIC_URL` is itself validated at startup, because it *is*
+published: absolute http(s) only (so `javascript:`, `data:` and `//host/x` are
+out), no userinfo (a credential must never be published — the lesson
+`lethe.anchor` already learned), no control characters (the value is base64'd
+into a response header, where a newline forges header structure), https unless
+the host is localhost, and length-capped. Path, query and fragment are dropped:
+the path is ours to supply.
 
 ### Going to mainnet
 

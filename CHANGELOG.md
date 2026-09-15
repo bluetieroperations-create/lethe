@@ -13,6 +13,28 @@ that issued it.
 
 ### Added
 
+- **The notary can be catalogued now, and cannot be used to poison a catalog.**
+  Setting `LETHE_NOTARY_PUBLIC_URL` gives the 402 challenge a `resource`
+  identity plus `extensions.bazaar.info` and `.schema` — the three fields
+  present on every one of 2000 catalogued x402 entries sampled 2026-09-15.
+  Without it the notary works exactly as before and is simply not indexable.
+
+  Adding that field is also how a sibling service acquired a live
+  vulnerability, measured the same day: it echoed the client's `resource` back
+  into its own 402, so an attacker could pay the minimum and have **their** url
+  catalogued **against the victim's payout address**. The notary is immune by
+  construction rather than by sanitizing: it sells exactly one resource, so the
+  path is the constant `/notarize`; the origin is operator config and is never
+  read from the request, including `Host` and `X-Forwarded-Host`; and the
+  certificate schema is closed, so a request carrying a `resource` key is a 422
+  before anything else runs. All three are pinned by tests — one asserts
+  `resource_info()` takes no request parameter, so the day it grows one is the
+  day CI says so.
+
+  `LETHE_NOTARY_PUBLIC_URL` is validated at startup because it is published:
+  absolute http(s) only, no userinfo, no control characters, https off
+  localhost, length-capped, canonicalized to its origin.
+
 - **`docs/fleet-reset.md`** — a design note on a second target shape: restoring
   a fleet of agents to an attested baseline, rather than deleting one data
   subject's records. Nothing is built. It exists because
