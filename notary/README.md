@@ -198,13 +198,25 @@ nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
 
 The default is Base Sepolia — `eip155:84532` — and it is a testnet on purpose.
 
-**A URL swap is not enough, and this section used to say otherwise.** Measured
-2026-09-15:
+**A URL swap is not enough, and this section used to say otherwise.** Probed
+2026-09-15, from this repo:
 
-> `facilitator.x402.rs` (31 kinds) and `x402.org/facilitator` (11 kinds) list no
-> `eip155:8453` in `/supported` — every EVM network they settle is a testnet.
-> Coinbase CDP is a facilitator that settles Base mainnet. This is not a claim
-> that *no* keyless facilitator settles mainnet: at least one does.
+| facilitator | kinds | `eip155:8453` (Base mainnet) |
+|---|---|---|
+| `x402.org/facilitator` | 11 | **absent** — its only EVM networks are `eip155:84532` and the `base-sepolia` alias |
+| `facilitator.x402.rs` | 31 | **absent** — 12 distinct `eip155:*` ids, none of them 8453 |
+
+That is the whole verified claim: **neither keyless facilitator advertises Base
+mainnet.** It is deliberately not the claim that no keyless facilitator settles
+mainnet — a sibling project reports a keyless settlement on `eip155:8453` and
+supplied a transaction hash, which this repo has not independently checked. Nor
+have we characterized every `eip155:*` id those lists contain; several are chain
+ids we could not identify, and calling them all testnets would be a guess.
+
+Coinbase CDP does settle Base mainnet. Also not our measurement — what we did
+verify is that its `/supported` requires authentication (below), which is
+consistent with it being a credentialed facilitator and is the part that affects
+this code.
 
 CDP requires an authenticated request — an `EdDSA` Bearer JWT, minted per call,
 bound to method, host and path, with a 120-second TTL. Setting
