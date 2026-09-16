@@ -28,6 +28,13 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .cdp_auth import (
+    CdpAuthError,
+    CdpAuthProvider,
+    CdpCredentials,
+    load_ed25519_key,
+)
+
 logger = logging.getLogger("lethe_notary.payments")
 
 
@@ -240,6 +247,11 @@ class PaymentConfig:
     # check_public_url. Optional: without it the 402 carries no resource
     # identity, which is legal x402 but not indexable by a catalog.
     public_url: str | None = None
+    # A CDP API key, when the operator has one. Its presence is what turns the
+    # facilitator client from anonymous into authenticated, and is therefore
+    # the difference between testnet-only and mainnet. Never printed: see
+    # CdpCredentials.__repr__.
+    cdp_credentials: "CdpCredentials | None" = None
 
     @classmethod
     def from_env(cls, environ=None) -> "PaymentConfig":
@@ -271,6 +283,7 @@ class PaymentConfig:
             public_url=(check_public_url(public_url)
                         if (public_url := env.get("LETHE_NOTARY_PUBLIC_URL"))
                         else None),
+            cdp_credentials=CdpCredentials.from_env(env),
         )
         config.check()
         return config
@@ -293,6 +306,17 @@ class PaymentConfig:
                     "the other names who to pay. Refusing rather than guessing "
                     "— unset whichever one you did not mean."
                 )
+            if self.cdp_credentials is not None:
+                # Same shape as the PAY_TO case above. A CDP credential exists
+                # to authenticate requests that move money; configured next to
+                # FREE=1 it moves none, and the operator who went to the
+                # trouble of provisioning an API key is not being told so.
+                raise PaymentConfigError(
+                    "LETHE_NOTARY_FREE=1 and LETHE_NOTARY_CDP_KEY_ID are both "
+                    "set. A CDP credential only authenticates settlement, and "
+                    "free mode settles nothing. Refusing rather than ignoring "
+                    "a credential you provisioned on purpose."
+                )
             return
         if not self.pay_to:
             raise PaymentConfigError(
@@ -303,6 +327,12 @@ class PaymentConfig:
             )
         check_network(self.network)
         check_pay_to(self.pay_to, self.network)
+        if self.cdp_credentials is not None:
+            # Parse it here so a mistyped key is a config error naming the key,
+            # rather than surfacing from inside preflight as "the facilitator
+            # cannot settle this network" — which sends the operator to look at
+            # the wrong thing entirely. Costs one Ed25519 key load at startup.
+            load_ed25519_key(self.cdp_credentials.secret)
         if not self.facilitator_url.startswith("https://"):
             # The facilitator is told what was paid and settles it. Over plain
             # HTTP that is an interceptable claim about money.
@@ -433,9 +463,19 @@ class PaymentGate:
             from x402.http import FacilitatorConfig, HTTPFacilitatorClientSync
             from x402.mechanisms.evm.exact.register import register_exact_evm_server
 
+            # An authenticated facilitator when a credential is configured,
+            # which is what makes mainnet reachable: every keyless facilitator
+            # this repo probed advertises testnet only. Absent a credential
+            # this is exactly the unauthenticated client it always was.
+            auth_provider = None
+            if self.config.cdp_credentials is not None:
+                auth_provider = CdpAuthProvider(
+                    self.config.cdp_credentials, self.config.facilitator_url
+                )
             server = x402ResourceServerSync(
                 HTTPFacilitatorClientSync(
-                    FacilitatorConfig(url=self.config.facilitator_url)
+                    FacilitatorConfig(url=self.config.facilitator_url,
+                                      auth_provider=auth_provider)
                 )
             )
             # Without a scheme registered for the network, building payment
@@ -461,6 +501,11 @@ class PaymentGate:
             return
         try:
             self.server().build_payment_requirements(self.resource_config())
+        except CdpAuthError:
+            # Not a facilitator problem, and saying so would send the operator
+            # to check the wrong thing. It already reads as an actionable
+            # message about the credential; let it through unchanged.
+            raise
         except Exception as exc:
             raise PaymentConfigError(
                 f"facilitator {self.config.facilitator_url} cannot settle scheme "

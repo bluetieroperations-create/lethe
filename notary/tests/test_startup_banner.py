@@ -164,3 +164,44 @@ def test_the_readme_shows_what_the_banner_actually_prints():
             "notary/README.md shows a banner the code does not print.\n"
             "README:\n  " + "\n  ".join(lines) +
             "\nactual:\n  " + "\n  ".join(actual))
+
+
+def test_an_authenticated_preflight_is_reported_as_checked():
+    """With a credential, preflight sent a token and the facilitator accepted
+    it — otherwise the process would have died before printing anything. That
+    is a measurement, so it belongs under `checked:` rather than being implied
+    by the credential merely being configured."""
+    import base64
+
+    from lethe_notary.cdp_auth import CdpCredentials
+
+    creds = CdpCredentials(key_id="key-abc", secret=base64.b64encode(bytes(32)).decode())
+    out = "\n".join(startup_banner(
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:8453",
+                      facilitator_url=FACILITATOR, cdp_credentials=creds),
+        KEY_ID))
+    assert "checked:     it accepted CDP credential key-abc" in out
+    assert out.count("NOT checked:") == 2
+
+
+def test_the_banner_never_prints_the_cdp_secret():
+    """The banner goes to stderr, which lands in journalctl, a container log
+    aggregator, and the screenshot an operator pastes when asking for help."""
+    import base64
+
+    from lethe_notary.cdp_auth import CdpCredentials
+
+    secret = base64.b64encode(bytes(range(32))).decode()
+    for network in ("eip155:84532", "eip155:8453", "eip155:31337"):
+        out = "\n".join(startup_banner(
+            PaymentConfig(pay_to=PAYEE, price="$0.01", network=network,
+                          facilitator_url=FACILITATOR,
+                          cdp_credentials=CdpCredentials(key_id="key-abc", secret=secret)),
+            KEY_ID))
+        assert secret not in out
+        assert secret[:16] not in out
+
+
+def test_without_a_credential_the_banner_says_nothing_about_one():
+    out = "\n".join(startup_banner(config_for("eip155:8453"), KEY_ID))
+    assert "CDP" not in out

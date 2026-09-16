@@ -13,6 +13,43 @@ that issued it.
 
 ### Added
 
+- **The notary can settle on mainnet.** It never could: every keyless
+  facilitator this repo probed advertises testnet only, the ones that settle
+  real money want a credential, and the notary sent none — so mainnet was not a
+  URL swap, it needed code. `lethe_notary.cdp_auth` is that code.
+  `LETHE_NOTARY_CDP_KEY_ID` and `LETHE_NOTARY_CDP_KEY_SECRET` turn the
+  facilitator client authenticated via x402's `auth_provider` seam; unset, the
+  client is anonymous exactly as before.
+
+  Each request carries its own `EdDSA` Bearer token, bound to the method, host
+  and path actually being requested and good for 120 seconds, so a token
+  captured anywhere cannot be replayed against a different endpoint or used for
+  long. The `uris` claim is built from the configured facilitator URL rather
+  than a hardcoded CDP path, so this works for any facilitator speaking the
+  same auth and stays correct if the endpoint layout moves.
+
+  **No new runtime dependency.** The JWS is ~15 lines over the Ed25519 already
+  in `cryptography`, which this package requires anyway; CI proves the claim by
+  minting a token on an install with no JWT library present. The usual reason
+  not to hand-roll JWT is that the vulnerabilities — `alg: none`, algorithm
+  confusion, unverified `kid` lookups — all live in code that *reads* tokens,
+  and this module only ever writes them. Correctness is pinned by having PyJWT
+  (a test-only dependency) verify what it produces.
+
+  Half a credential is refused at startup, as is a credential next to
+  `LETHE_NOTARY_FREE=1` — the same shape as the `FREE=1`-beats-`PAY_TO` bug
+  fixed below, where the operator believes a cutover happened and the code
+  quietly disagrees. The secret is kept out of `__repr__`, out of error
+  messages and out of the startup banner, all three pinned by tests.
+
+  What it does not do is tell you the credential is *correct*. It mints a token
+  CDP should accept; if it is wrong, `/supported` answers 401 and preflight
+  refuses to start — at boot rather than at the first customer. When it is
+  right the banner reports it under `checked:`, because "a credential is
+  configured" and "the credential works" are different facts and only the
+  second is worth anything. No mainnet payment has been settled through this
+  package yet; authenticated is not settled.
+
 - **The notary can be catalogued now, and cannot be used to poison a catalog.**
   Setting `LETHE_NOTARY_PUBLIC_URL` gives the 402 challenge a `resource`
   identity plus `extensions.bazaar.info` and `.schema` — the three fields
