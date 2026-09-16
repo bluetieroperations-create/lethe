@@ -21,12 +21,16 @@ that issued it.
   facilitator client authenticated via x402's `auth_provider` seam; unset, the
   client is anonymous exactly as before.
 
-  Each request carries its own `EdDSA` Bearer token, bound to the method, host
-  and path actually being requested and good for 120 seconds, so a token
-  captured anywhere cannot be replayed against a different endpoint or used for
-  long. The `uris` claim is built from the configured facilitator URL rather
-  than a hardcoded CDP path, so this works for any facilitator speaking the
-  same auth and stays correct if the endpoint layout moves.
+  Each request carries its own `EdDSA` Bearer token, bound to the method,
+  authority and path actually being requested and good for 120 seconds, so a
+  token captured anywhere cannot be replayed against a different endpoint or
+  used for long. The `uris` claim is built from the configured facilitator URL
+  rather than a hardcoded CDP path, so this works for any facilitator speaking
+  the same auth and stays correct if the endpoint layout moves. The authority
+  is taken verbatim, matching what CDP's own client signs: normalizing it would
+  drop a non-default port, lowercase the host, and strip the brackets off an
+  IPv6 address, each of which yields a token the facilitator computes
+  differently and rejects with an unexplained 401.
 
   **No new runtime dependency.** The JWS is ~15 lines over the Ed25519 already
   in `cryptography`, which this package requires anyway; CI proves the claim by

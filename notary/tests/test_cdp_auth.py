@@ -112,22 +112,46 @@ def test_the_token_names_the_exact_request_it_authorizes(secret):
     assert len(set(seen.values())) == 3
 
 
-def test_the_uri_drops_the_port_and_any_userinfo(secret):
-    """CDP signs host without port. A mismatch here is a 401 nobody can debug
-    from the error message.
+def _uris(token):
+    return json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))["uris"]
 
-    The credential in the URL must not ride along into a token that gets sent
-    to the facilitator and logged. It is spelled out in full rather than as a
-    short string: a token is mostly random base64, so asserting a two-letter
-    secret is absent fails about 2% of the time by pure chance. (Written that
-    way first, and caught by one red run out of several.)
+
+@pytest.mark.parametrize("url,expected", [
+    # The ordinary case, and the only one CDP itself exercises.
+    ("https://api.cdp.coinbase.com/x/supported", "api.cdp.coinbase.com/x/supported"),
+    # A non-default port is part of the authority and must survive.
+    ("https://facilitator.local:8443/x/supported", "facilitator.local:8443/x/supported"),
+    # Case is preserved rather than normalized, because the facilitator
+    # compares against what it computed, not against what we think is tidier.
+    ("https://API.Example.COM/x/supported", "API.Example.COM/x/supported"),
+    # An IPv6 authority keeps its brackets. Without them it is not a host.
+    ("https://[::1]:8402/x/supported", "[::1]:8402/x/supported"),
+])
+def test_the_uri_matches_what_cdps_own_client_would_sign(secret, url, expected):
+    """CDP's client signs `urlparse(url).netloc`. Anything that normalizes
+    that — dropping a port, lowercasing, unwrapping an IPv6 address — produces
+    a token the facilitator computes differently and rejects, with a 401 that
+    explains nothing.
+
+    Found auditing this change: `.hostname` was used first, which does all
+    three. Measured against `netloc` on five URLs, four diverged.
+    """
+    assert _uris(mint_jwt(KEY_ID, load_ed25519_key(secret), "GET", url)) == [f"GET {expected}"]
+
+
+def test_a_credential_in_the_facilitator_url_never_reaches_the_token(secret):
+    """It would otherwise ride along into a header sent to the facilitator and
+    written to its logs.
+
+    The password is spelled out at length on purpose: a token is mostly random
+    base64, so asserting a two-letter secret is absent fails about 2% of the
+    time by chance. Written that way first, and caught by one red run.
     """
     token = mint_jwt(KEY_ID, load_ed25519_key(secret), "GET",
                      "https://someuser:l0ngEnoughT0N0tC0llide@api.example.com:8443/x/supported")
-    claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
-    assert claims["uris"] == ["GET api.example.com/x/supported"]
+    assert _uris(token) == ["GET api.example.com:8443/x/supported"]
     assert "l0ngEnoughT0N0tC0llide" not in token
-    assert "someuser" not in json.dumps(claims)
+    assert "someuser" not in token
 
 
 def test_each_token_carries_its_own_nonce(secret):
@@ -274,7 +298,11 @@ def stub_facilitator(signing_key):
                 record["verdict"] = type(exc).__name__
                 return self._send(401, {"error": "bad token"})
             record["uris"] = claims["uris"]
-            expected = f"GET {self.headers.get('Host', '').split(':')[0]}{self.path}"
+            # The Host header verbatim, port included — which is what a real
+            # facilitator has to compare against, because it is all it knows
+            # about how it was addressed. Stripping the port here would have
+            # hidden the `.hostname`-vs-`netloc` bug this stub caught.
+            expected = f"GET {self.headers.get('Host', '')}{self.path}"
             if claims["uris"] != [expected]:
                 record["verdict"] = "wrong-uri"
                 return self._send(401, {"error": "token not valid here"})
@@ -321,7 +349,7 @@ def test_a_credential_reaches_the_facilitator_and_unlocks_mainnet(
     url, seen = stub_facilitator
     assert _preflight(url, CdpCredentials(key_id=KEY_ID, secret=secret)) is True
     assert [r["verdict"] for r in seen] == ["accepted"]
-    assert seen[0]["uris"] == [f"GET 127.0.0.1{seen[0]['path']}"]
+    assert seen[0]["uris"] == [f"GET {url.removeprefix('http://')}{seen[0]['path']}"]
 
 
 def test_without_a_credential_the_notary_still_sends_no_header(stub_facilitator):
@@ -396,3 +424,77 @@ def test_preflight_does_not_relabel_a_credential_failure(stub_facilitator):
     with pytest.raises(CdpAuthError) as e:
         PaymentGate(config).preflight()
     assert "cannot settle" not in str(e.value)
+
+
+def test_tokens_stay_valid_when_minted_from_many_threads(secret, signing_key):
+    """Settlement runs off the event loop in a thread pool — that is a
+    deliberate design property here, since a synchronous facilitator call
+    inline would serialize every other request behind it. So one shared
+    Ed25519 key object gets signed with concurrently, and a token that came
+    out garbled would be a 401 under load and nowhere else."""
+    import concurrent.futures
+
+    provider = CdpAuthProvider(CdpCredentials(key_id=KEY_ID, secret=secret),
+                               "https://h:8443/x402")
+
+    def mint_and_check(_):
+        headers = provider.get_auth_headers()
+        return all(
+            pyjwt.decode(getattr(headers, name)["Authorization"][7:],
+                         signing_key.public_key(), algorithms=["EdDSA"],
+                         options=DECODE_OPTS)["uris"] == [f"{method} h:8443/x402{path}"]
+            for name, method, path in (("verify", "POST", "/verify"),
+                                       ("settle", "POST", "/settle"),
+                                       ("supported", "GET", "/supported"))
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        assert all(pool.map(mint_and_check, range(200)))
+
+
+def test_a_hostile_facilitator_cannot_extract_the_signing_key(secret):
+    """The worst case on this path: a facilitator that reflects everything it
+    receives, so whatever we sent lands in an error message the notary prints
+    at boot and an operator pastes into an issue.
+
+    A token can surface that way, and that is acceptable — it is a signature,
+    not the key; it is bound to one method, host and path; it expires in two
+    minutes; and the facilitator already had it. The *secret* must never
+    appear, because that is forgeable forever.
+    """
+    import json as _json
+    import threading
+    import traceback
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Reflector(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = _json.dumps(dict(self.headers)).encode()
+            self.send_response(500)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Reflector)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        from lethe_notary.payments import PaymentConfig, PaymentGate
+        config = PaymentConfig(
+            pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01",
+            network="eip155:8453",
+            facilitator_url=f"http://127.0.0.1:{server.server_port}",
+            cdp_credentials=CdpCredentials(key_id=KEY_ID, secret=secret))
+        try:
+            PaymentGate(config).preflight()
+            surface = ""
+        except Exception as exc:
+            surface = f"{exc}\n{traceback.format_exc()}"
+    finally:
+        server.shutdown()
+
+    assert "Bearer" in surface, "the reflector did not echo; the test proves nothing"
+    assert secret not in surface
+    assert secret[:24] not in surface

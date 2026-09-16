@@ -24,6 +24,16 @@ WHAT THIS DOES NOT DO. It cannot tell you the credential is correct, or that it
 belongs to an account that can settle. It mints a token CDP *should* accept. If
 it is wrong, `/supported` answers 401 and the preflight refuses to start — at
 boot, before a customer. That is the whole of the guarantee.
+
+ONE BOUNDED EXPOSURE, measured rather than assumed. A facilitator that reflects
+the request headers into its response body puts one of our *tokens* into the
+error the SDK raises, which the notary prints at boot. That is not an
+escalation: the token is a signature, never the key; it is bound to a single
+method, host and path; it dies in 120 seconds; and the only party who can see
+it this way is the facilitator, who was just handed it anyway. The secret
+itself does not appear in any error, log or banner — probed against a
+facilitator that returns 500, one that returns garbage, and one that echoes
+everything it receives.
 """
 
 import base64
@@ -97,11 +107,20 @@ def mint_jwt(key_id: str, signing_key: Any, method: str, url: str,
     calls them with arguments in production.
     """
     parts = urllib.parse.urlsplit(url)
-    if not parts.hostname:
+    # Everything after the last "@" is host[:port], taken verbatim — which is
+    # what CDP's own client signs (it passes `urlparse(...).netloc`). Three
+    # things ride on taking it verbatim rather than using `.hostname`:
+    # `.hostname` drops a non-default port, lowercases the host, and returns an
+    # IPv6 address with its brackets stripped, which is not a host at all. Any
+    # of those makes a token the facilitator computes differently and rejects,
+    # with a 401 that says nothing about why. (The bracket case is the same one
+    # `lethe.anchor` hit, and `check_public_url` avoids the same way.)
+    # Userinfo is dropped either way, so a credential in the URL cannot ride
+    # along into a token.
+    host = parts.netloc.rpartition("@")[2]
+    if not host:
         raise CdpAuthError(f"cannot mint a CDP token for {url!r}: it names no host")
-    # Host without userinfo and without the port, and the path as requested.
-    # This mirrors what CDP's own SDK signs.
-    uri = f"{method.upper()} {parts.hostname}{parts.path}"
+    uri = f"{method.upper()} {host}{parts.path}"
 
     issued = int(time.time()) if now is None else now
     header = {
