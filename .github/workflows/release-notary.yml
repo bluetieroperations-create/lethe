@@ -1,0 +1,169 @@
+name: Release notary
+
+# lethe-notary is a second distribution in this repo with its own version line,
+# so it gets its own tag namespace. A `v*` tag releases lethe-delete and says
+# nothing about the notary; `notary-v*` releases the notary and says nothing
+# about lethe-delete. Tying them together would force one to take a version
+# number because the other moved.
+#
+# PyPI only, no GitHub Release. The root workflow builds its release notes from
+# CHANGELOG.md so the two can never tell different stories, and that changelog
+# is versioned to lethe-delete — there is no `## [0.2.0]` section that means
+# the notary. Inventing one here would be the exact drift that guard exists to
+# prevent, so the tag is the record until the notary has a changelog of its own.
+on:
+  push:
+    tags: ["notary-v*"]
+
+  # Same retry path as release.yml: a PyPI upload can fail after the tag is
+  # already pushed, and without this the only way forward is burning a version
+  # number that can never be reused.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish to PyPI, e.g. notary-v0.2.0."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    name: Publish lethe-notary to PyPI
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    permissions:
+      # Spelled out because a job-level block sets everything unlisted to
+      # `none`, and checkout needs this.
+      contents: read
+      # Mints the short-lived PyPI token. The only write this job has, and
+      # there is no long-lived secret anywhere to leak.
+      id-token: write
+    steps:
+      - name: The tag must look like a notary release tag
+        run: |
+          case "$RELEASE_TAG" in
+            notary-v[0-9]*) echo "publishing $RELEASE_TAG" ;;
+            *) echo "::error::RELEASE_TAG='$RELEASE_TAG' is not a notary-vN.N.N tag"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # A `ref:` that resolves to nothing checks out the default branch rather
+      # than failing, which would publish main's tree under a tag's name.
+      - name: The checkout must be at that tag
+        run: |
+          head="$(git rev-parse HEAD)"
+          want="$(git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}" || true)"
+          if [ -z "$want" ]; then
+            echo "::error::tag $RELEASE_TAG is not present after checkout"; exit 1
+          fi
+          if [ "$head" != "$want" ]; then
+            echo "::error::HEAD is $head, but $RELEASE_TAG is $want - wrong tree checked out"
+            exit 1
+          fi
+          echo "checked out $RELEASE_TAG ($head)"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The tag is the release's identity; if it disagrees with the packaged
+      # version, the artifact and its label describe different things. Read
+      # the TOML rather than importing anything: this step must not need the
+      # package's dependencies.
+      - name: Tag matches the packaged version
+        run: |
+          want="${RELEASE_TAG#notary-v}"
+          got="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("notary/pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$want packaged=$got"
+          if [ "$want" != "$got" ]; then
+            echo "::error::tag $RELEASE_TAG does not match notary/pyproject.toml ($got)"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build notary --outdir dist
+
+      # Checks the artifact that actually gets uploaded and can never be
+      # replaced, not just the file it was built from.
+      - name: Built artifacts must carry the tag's version
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys
+
+          version = os.environ["RELEASE_TAG"].removeprefix("notary-v")
+          names = sorted(p.name for p in pathlib.Path("dist").iterdir())
+          print("built:", names)
+          expected = {f"lethe_notary-{version}-py3-none-any.whl",
+                      f"lethe_notary-{version}.tar.gz"}
+          if set(names) != expected:
+              sys.exit(f"dist/ is {names}, expected {sorted(expected)}")
+          print(f"both artifacts carry {version}")
+          PY
+          python -m twine check dist/*
+
+      # No third-party action: a publish step should not hand anything to a
+      # supply-chain dependency it does not need. The whole Trusted Publishing
+      # exchange happens inside ONE process, so the credential never crosses a
+      # step boundary or reaches the environment.
+      - name: Publish
+        run: |
+          python - <<'PY'
+          import glob, json, os, subprocess, sys, urllib.error, urllib.request
+
+          def post(url, payload=None, headers=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              req = urllib.request.Request(url, data=data, headers=headers or {})
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          oidc = post(
+              os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=pypi",
+              headers={"Authorization": "bearer "
+                       + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
+          )["value"]
+
+          try:
+              token = post("https://pypi.org/_/oidc/mint-token", {"token": oidc},
+                           {"Content-Type": "application/json"})["token"]
+          except urllib.error.HTTPError as exc:
+              # Print what PyPI said: its body names the claim that did not
+              # match. Guessing cost lethe-delete a whole failed release cycle.
+              body = exc.read().decode("utf-8", "replace").strip()[:2000]
+              hint = (
+                  "422 means no configured publisher matched this run, which "
+                  "includes having none at all. For a project that has never "
+                  "been published there is nothing at /manage/project/, so it "
+                  "must be a PENDING publisher, added at "
+                  "https://pypi.org/manage/account/publishing/ . Check: PyPI "
+                  "Project Name `lethe-notary`; Owner "
+                  "`bluetieroperations-create`; Repository `lethe`; Workflow "
+                  "name the FILENAME `release-notary.yml`, not the display "
+                  "name; Environment blank, because this job declares none."
+                  if exc.code == 422 else
+                  "Check the publisher: owner bluetieroperations-create, "
+                  "repository lethe, workflow release-notary.yml, environment blank."
+              )
+              sys.exit(
+                  f"PyPI refused to mint an upload token (HTTP {exc.code}).\n"
+                  f"PyPI said: {body}\n\n{hint}"
+              )
+          except urllib.error.URLError as exc:
+              sys.exit(f"Could not reach PyPI to mint a token: {exc.reason}")
+
+          print(f"::add-mask::{token}")
+
+          env = dict(os.environ, TWINE_USERNAME="__token__", TWINE_PASSWORD=token)
+          # Not --skip-existing: on a tag build, a version already on PyPI
+          # means something is wrong and should be loud.
+          raise SystemExit(subprocess.call(
+              [sys.executable, "-m", "twine", "upload", *sorted(glob.glob("dist/*"))],
+              env=env))
+          PY

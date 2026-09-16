@@ -4,9 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lethe-notary"
-version = "0.1.1"
+version = "0.2.0"
 description = "A paid countersigning witness for Lethe deletion certificates, billed over x402."
+# Without this the PyPI page is blank — no description at all — and a
+# published version's metadata can never be amended, only superseded.
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["x402", "gdpr", "ccpa", "deletion", "attestation", "notary",
+            "audit", "compliance", "micropayments", "agent-payments"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "lethe-delete>=0.7",
     "starlette>=0.37",
@@ -21,6 +35,10 @@ dependencies = [
     # EIP-55 check on LETHE_NOTARY_PAY_TO silently accept a mistyped payee.
     "x402[evm,httpx]>=2,<3",
 ]
+
+[project.urls]
+Repository = "https://github.com/bluetieroperations-create/lethe"
+Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/notary/README.md"
 
 [project.optional-dependencies]
 # httpx, not httpx2: starlette's TestClient imports `httpx`, and the
