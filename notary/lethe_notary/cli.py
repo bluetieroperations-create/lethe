@@ -59,6 +59,52 @@ def backup(log_path: str, out: str, overwrite: bool) -> None:
     click.echo(f"wrote {out} ({rows} witnessed records)")
 
 
+def startup_banner(config: PaymentConfig, key_id: str) -> list[str]:
+    """The lines `serve` prints once preflight has passed.
+
+    Two jobs. Say plainly whether the money is real — a notary on Base Sepolia
+    and one on Base mainnet are one environment variable apart and otherwise
+    print an almost identical line, and an operator who mixes them up either
+    gives the service away or believes testnet dollars are revenue.
+
+    And say NO MORE than is known. This banner gets read as a readiness signal,
+    and by itself it is a label on a config value. Exactly one thing here has
+    been checked against the world: preflight just asked the facilitator whether
+    it settles this (scheme, network) and it said yes. Everything else is an
+    assertion about the environment that nothing in this process can test —
+    above all whether the operator controls the address being paid. On mainnet
+    that gap costs real money, so it is printed rather than implied.
+    """
+    if config.free_mode:
+        return [f"lethe-notary  key_id={key_id}  FREE (not charging)"]
+
+    kind = network_kind(config.network)
+    label = {
+        "testnet": " [TESTNET - payments are not real money]",
+        "mainnet": " [MAINNET - real money]",
+        "unknown": " [unrecognized network - verify before serving]",
+    }[kind]
+    lines = [
+        f"lethe-notary  key_id={key_id}  "
+        f"{config.price} on {config.network}{label}",
+        f"              checked:     {config.facilitator_url} reports it "
+        f"settles 'exact' on {config.network}",
+    ]
+    if kind != "testnet":
+        # Only where being wrong costs something. The same gap exists on
+        # testnet and is worth nothing there, and a caveat nobody needs is a
+        # caveat everybody learns to skip.
+        lines.append(
+            f"              NOT checked: that you control {config.pay_to} — "
+            f"no code here can tell. Send one payment and confirm it arrives."
+        )
+        lines.append(
+            "              NOT checked: that any payment has succeeded. "
+            "This line means configured, not earning."
+        )
+    return lines
+
+
 @cli.command()
 @click.option("--key-file", envvar="LETHE_NOTARY_KEY_FILE", required=True)
 @click.option("--log", "log_path", envvar="LETHE_NOTARY_LOG",
@@ -98,22 +144,8 @@ def serve(key_file: str, log_path: str, host: str, port: int,
         app.state.notary.gate.preflight()
     except PaymentConfigError as e:
         raise SystemExit(f"lethe-notary: {e}") from None
-    # Say plainly whether the money is real. A notary on Base Sepolia and one
-    # on Base mainnet are one environment variable apart and print an almost
-    # identical line; an operator who mixes them up either gives the service
-    # away or believes testnet dollars are revenue.
-    if config.free_mode:
-        mode = "FREE (not charging)"
-    else:
-        kind = network_kind(config.network)
-        label = {
-            "testnet": " [TESTNET - payments are not real money]",
-            "mainnet": " [MAINNET - real money]",
-            "unknown": " [unrecognized network - verify before serving]",
-        }[kind]
-        mode = f"{config.price} on {config.network}{label}"
-    print(f"lethe-notary  key_id={key_id_for(signer.public_key_b64())}  {mode}",
-          file=sys.stderr)
+    for line in startup_banner(config, key_id_for(signer.public_key_b64())):
+        print(line, file=sys.stderr)
     uvicorn.run(app, host=host, port=port)
 
 
