@@ -52,6 +52,23 @@ that issued it.
 
 ### Fixed
 
+- **The startup banner read as a readiness signal and was not one.** It printed
+  the price, the network and — via the config it echoed — an implication that
+  the service was set up to be paid. Exactly one of its claims had been checked
+  against the world: preflight asks the facilitator whether it settles `exact`
+  on this network. Whether the operator *controls* the payee cannot be checked
+  by any code here, and on mainnet being wrong means a notary that starts
+  cleanly while every payment lands in a wallet the operator cannot open. The
+  banner now separates the two — one `checked:` line naming the facilitator
+  actually asked, and on mainnet two `NOT checked:` lines, including the payee
+  printed back so a typo is readable. Testnet gets neither, because the same
+  gap is worth nothing there and a caveat nobody needs is a caveat everybody
+  learns to skip, including on the run where it is the mainnet one.
+  Unrecognized network ids take the mainnet caveats rather than the testnet
+  silence. Extracted to `startup_banner()` so it is testable without binding a
+  port; the twelve tests are mutation-checked against nine ways to make the
+  banner lie, and all nine fail at least one test.
+
 - **`LETHE_NOTARY_FREE=1` silently won over a configured `LETHE_NOTARY_PAY_TO`.**
   Two contradictory instructions — charge nobody, and here is who to pay — and
   the code picked one without saying so, giving the service away to an operator

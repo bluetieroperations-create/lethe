@@ -122,3 +122,45 @@ def test_every_variant_identifies_the_key_that_will_be_signing():
     for out in (banner("eip155:84532"), banner("eip155:8453"),
                 banner("eip155:31337"), banner("eip155:8453", free=True)):
         assert KEY_ID in out.splitlines()[0]
+
+
+def test_the_readme_shows_what_the_banner_actually_prints():
+    """The banner is quoted in notary/README.md, under the mainnet section an
+    operator reads exactly once, right before they go live.
+
+    This PR already carries a CHANGELOG entry for a README that documented
+    mainnet wrongly, and the commit that made the banner honest left that same
+    README quoting the old one-line form. A doc that describes a safety notice
+    inaccurately is worse than no doc: it teaches the operator what to expect,
+    so the line they should have read as new reads as normal. Pin it.
+    """
+    import re
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    blocks = re.findall(r"^```\n(lethe-notary .*?)```",
+                        readme.read_text(), re.S | re.M)
+    assert blocks, "no banner block found in notary/README.md"
+
+    for block in blocks:
+        lines = block.rstrip("\n").splitlines()
+        # Drive the comparison from the README itself, so a block for a network
+        # nobody has thought of yet is still checked rather than skipped.
+        head = re.match(r"lethe-notary  key_id=…  (\S+) on (\S+) \[", lines[0])
+        assert head, f"unrecognized banner block in README:\n{lines[0]}"
+        price, network = head.groups()
+        facilitator = re.search(r"checked:\s+(\S+) reports it", block)
+        assert facilitator, f"README banner block has no checked: line:\n{block}"
+
+        rendered = startup_banner(
+            PaymentConfig(pay_to=PAYEE, price=price, network=network,
+                          facilitator_url=facilitator.group(1), free_mode=False),
+            KEY_ID)
+        # The README elides the two operator-specific values.
+        actual = [re.sub(r"0x[0-9a-fA-F]{40}", "0x…",
+                         ln.replace(f"key_id={KEY_ID}", "key_id=…"))
+                  for ln in rendered]
+        assert actual == lines, (
+            "notary/README.md shows a banner the code does not print.\n"
+            "README:\n  " + "\n  ".join(lines) +
+            "\nactual:\n  " + "\n  ".join(actual))

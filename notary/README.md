@@ -306,19 +306,36 @@ Check the payee **before** the first real payment, not after. `PAY_TO` is
 checked for shape and EIP-55 checksum, which catches placeholders and typos —
 it cannot tell whether you control the address, and nothing later will.
 
-The startup banner says which kind of money is being charged, because the two
-configurations are one environment variable apart and otherwise print the same
-line:
+The startup banner says so out loud, because the two configurations are one
+environment variable apart and otherwise print the same line. On testnet:
 
 ```
 lethe-notary  key_id=…  $0.01 on eip155:84532 [TESTNET - payments are not real money]
-lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
+              checked:     https://x402.org/facilitator reports it settles 'exact' on eip155:84532
 ```
 
+On mainnet, where being wrong costs money, it also prints what it has *not*
+checked. (The facilitator is elided because mainnet needs one that settles it,
+which is the code that has not landed — see above; `x402.org/facilitator` would
+not get this far, it is refused at preflight.)
+
+```
+lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
+              checked:     https://… reports it settles 'exact' on eip155:8453
+              NOT checked: that you control 0x… — no code here can tell. Send one payment and confirm it arrives.
+              NOT checked: that any payment has succeeded. This line means configured, not earning.
+```
+
+Only the `checked:` line is a measurement: preflight fetched the facilitator's
+`/supported` and it listed `exact` on this network. Everything else on the
+banner is a label on an environment variable, and the banner says which is
+which rather than letting a printed address read as a verified one.
+
 An unrecognized network id says `[unrecognized network - verify before
-serving]` rather than guessing. `/.well-known/notary` reports the same thing as
-`network_kind`, so a paying agent does not need its own table of chain ids to
-know what it is being quoted in.
+serving]` rather than guessing, and takes the mainnet caveats — unknown might
+be real money. `/.well-known/notary` reports the same `network_kind`, so a
+paying agent does not need its own table of chain ids to know what it is being
+quoted in.
 
 ## Relationship to `lethe`
 
