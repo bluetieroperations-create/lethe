@@ -155,10 +155,16 @@ def test_a_credential_in_the_facilitator_url_never_reaches_the_token(secret):
 
 
 def test_each_token_carries_its_own_nonce(secret):
+    """Distinct per token, and shaped the way CDP shapes it: sixteen decimal
+    digits. Found auditing this change — it was 32 hex characters, beside a
+    comment claiming it matched the reference implementation. Harmless if
+    their server treats the nonce as opaque, and a 401 with nothing to debug
+    if it does not; copying the shape costs nothing either way."""
     key = load_ed25519_key(secret)
-    nonces = {pyjwt.get_unverified_header(
-        mint_jwt(KEY_ID, key, "GET", "https://h/s"))["nonce"] for _ in range(20)}
-    assert len(nonces) == 20
+    nonces = [pyjwt.get_unverified_header(
+        mint_jwt(KEY_ID, key, "GET", "https://h/s"))["nonce"] for _ in range(20)]
+    assert len(set(nonces)) == 20
+    assert all(len(n) == 16 and n.isdigit() for n in nonces), nonces[:3]
 
 
 def test_a_url_with_no_host_is_refused(secret):

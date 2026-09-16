@@ -58,6 +58,11 @@ def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+def _generate_nonce() -> str:
+    """Sixteen decimal digits, matching CDP's own header nonce."""
+    return "".join(secrets.choice("0123456789") for _ in range(16))
+
+
 def load_ed25519_key(secret: str) -> Any:
     """Parse a CDP API secret into a signing key.
 
@@ -127,9 +132,14 @@ def mint_jwt(key_id: str, signing_key: Any, method: str, url: str,
         "alg": "EdDSA",
         "kid": key_id,
         "typ": "JWT",
-        # CDP's SDK sends a per-token nonce. Replicated rather than reasoned
-        # about: matching the reference implementation is the point.
-        "nonce": secrets.token_hex(16) if nonce is None else nonce,
+        # Sixteen decimal digits, which is the shape CDP's own SDK sends. The
+        # shape is copied rather than improved on: if their server checks it at
+        # all, a 32-character hex nonce is a 401 with nothing in it to debug,
+        # and there is no upside to being different. The randomness source is
+        # ours to pick, and `secrets` is used where CDP reaches for `random` —
+        # a predictable nonce is the one way this field can be wrong that the
+        # server cannot see.
+        "nonce": _generate_nonce() if nonce is None else nonce,
     }
     claims: dict[str, Any] = {
         "sub": key_id,
