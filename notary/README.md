@@ -180,6 +180,8 @@ from it, and every receipt already issued becomes unverifiable if it is lost.
 | `LETHE_NOTARY_FACILITATOR` | `https://x402.org/facilitator` | must be https |
 | `LETHE_NOTARY_FREE` | unset | run without charging, deliberately |
 | `LETHE_NOTARY_PUBLIC_URL` | unset | the origin this notary answers on; publishes a catalogable resource identity — see below |
+| `LETHE_NOTARY_CDP_KEY_ID` | unset | CDP API key id — required for a facilitator that authenticates, i.e. for mainnet |
+| `LETHE_NOTARY_CDP_KEY_SECRET` | unset | the matching Ed25519 secret. Both or neither; half a pair is refused |
 
 It **fails to start** rather than serve wrongly: no `PAY_TO` and no explicit
 `FREE=1` is a startup error, because one missing environment variable on a
@@ -280,17 +282,39 @@ customer. Do not rely on that for every facilitator: one whose `/supported` is
 public but whose `/settle` is not would pass preflight and fail on the first
 payment.
 
-**Mainnet is therefore not a configuration change today — it needs code.** The
-seam exists: `x402`'s `FacilitatorConfig` takes an `auth_provider`, and
-`x402.http` ships `CreateHeadersAuthProvider`, so the JWT minting plugs in
-without forking the SDK. `PaymentGate.server()` would need to construct and pass
-one. Until that lands, run on testnet.
-
-Two variables still have to move together once it does:
+**That code now exists.** `lethe_notary.cdp_auth` mints the JWT and
+`PaymentGate.server()` passes it to the facilitator client as an
+`auth_provider`, so a credentialed facilitator is a configuration change again.
+Set the credential alongside the network and the facilitator:
 
 ```bash
 export LETHE_NOTARY_NETWORK=eip155:8453          # Base mainnet
 export LETHE_NOTARY_FACILITATOR=https://...      # one that settles mainnet
+export LETHE_NOTARY_CDP_KEY_ID=...               # both, or neither
+export LETHE_NOTARY_CDP_KEY_SECRET=...
+```
+
+The token is minted per call and bound to the exact method, host and path being
+requested, with a 120-second life, so one captured anywhere cannot be replayed
+against a different endpoint or used for long. It is signed with the Ed25519
+already in `cryptography`, which this package depends on anyway — **mainnet auth
+adds no runtime dependency**, and CI proves that by minting a token on an
+install that has no JWT library at all. The JWS is checked against PyJWT in the
+test suite rather than against this repo's own idea of a JWT.
+
+Half a credential is refused at startup, for the reason `FREE=1` next to
+`PAY_TO` is: with one variable set the notary sends no credential at all, so an
+operator who believes they cut over to mainnet is either 401ing or quietly
+still on a keyless testnet facilitator.
+
+**What this does not do is tell you the credential is right.** It mints a token
+CDP should accept. If it is wrong, `/supported` answers 401 and the notary
+refuses to start — at boot, before a customer, which is the only good place to
+find out. When it is right the banner says so, because *a credential is
+configured* and *the credential works* are different facts:
+
+```
+              checked:     it accepted CDP credential <key id> — preflight was authenticated
 ```
 
 Changing only the network is caught at boot. The preflight asks the
@@ -315,9 +339,9 @@ lethe-notary  key_id=…  $0.01 on eip155:84532 [TESTNET - payments are not real
 ```
 
 On mainnet, where being wrong costs money, it also prints what it has *not*
-checked. (The facilitator is elided because mainnet needs one that settles it,
-which is the code that has not landed — see above; `x402.org/facilitator` would
-not get this far, it is refused at preflight.)
+checked. (The facilitator is elided because mainnet needs one that settles it
+and a credential to reach it — see above; `x402.org/facilitator` would not get
+this far, it is refused at preflight.)
 
 ```
 lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
@@ -464,6 +488,8 @@ the buyer to the configured payee — transaction `0x27b42be68a…` in block
 46487830, method `TransferWithAuthorization`. Everything in this package has
 now been exercised against something real.
 
-Testnet, though. Mainnet needs a facilitator that settles it (see above), and
-the first mainnet payment deserves the same scrutiny: check the chain, not the
-`200`.
+Testnet, though. Mainnet now has the code it needs — a credentialed
+facilitator, authenticated per call (see above) — but *authenticated* is not
+*settled*: no mainnet payment has been made through this package, and the first
+one deserves the same scrutiny as this testnet one got. Check the chain, not
+the `200`.

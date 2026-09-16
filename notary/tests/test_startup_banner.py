@@ -164,3 +164,94 @@ def test_the_readme_shows_what_the_banner_actually_prints():
             "notary/README.md shows a banner the code does not print.\n"
             "README:\n  " + "\n  ".join(lines) +
             "\nactual:\n  " + "\n  ".join(actual))
+
+
+def test_an_authenticated_preflight_is_reported_as_checked():
+    """With a credential, preflight sent a token and the facilitator accepted
+    it — otherwise the process would have died before printing anything. That
+    is a measurement, so it belongs under `checked:` rather than being implied
+    by the credential merely being configured."""
+    import base64
+
+    from lethe_notary.cdp_auth import CdpCredentials
+
+    creds = CdpCredentials(key_id="key-abc", secret=base64.b64encode(bytes(32)).decode())
+    out = "\n".join(startup_banner(
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:8453",
+                      facilitator_url=FACILITATOR, cdp_credentials=creds),
+        KEY_ID))
+    assert "checked:     it accepted CDP credential key-abc" in out
+    assert out.count("NOT checked:") == 2
+
+
+def test_the_banner_never_prints_the_cdp_secret():
+    """The banner goes to stderr, which lands in journalctl, a container log
+    aggregator, and the screenshot an operator pastes when asking for help."""
+    import base64
+
+    from lethe_notary.cdp_auth import CdpCredentials
+
+    secret = base64.b64encode(bytes(range(32))).decode()
+    for network in ("eip155:84532", "eip155:8453", "eip155:31337"):
+        out = "\n".join(startup_banner(
+            PaymentConfig(pay_to=PAYEE, price="$0.01", network=network,
+                          facilitator_url=FACILITATOR,
+                          cdp_credentials=CdpCredentials(key_id="key-abc", secret=secret)),
+            KEY_ID))
+        assert secret not in out
+        assert secret[:16] not in out
+
+
+def test_without_a_credential_the_banner_says_nothing_about_one():
+    out = "\n".join(startup_banner(config_for("eip155:8453"), KEY_ID))
+    assert "CDP" not in out
+
+
+def test_no_readme_line_claims_banner_output_the_code_cannot_produce():
+    """The block guard above only covers fences that open with `lethe-notary`.
+    A single continuation line quoted on its own — which the mainnet auth
+    section does — slips past it, and that is exactly the shape that goes
+    stale: it is the line an operator scans for to confirm their credential
+    took.
+
+    So the weaker, broader property: every line anywhere in the README that
+    looks like banner output must be a line some configuration actually
+    prints. Renders every variant and checks membership, which needs no
+    parsing of the surrounding prose and cannot be fooled by a fence.
+    """
+    import base64
+    import re
+    from itertools import product
+    from pathlib import Path
+
+    from lethe_notary.cdp_auth import CdpCredentials
+
+    def normalize(line):
+        """Blur the parts that legitimately vary between one operator and
+        another — which facilitator, which payee, which network. What is being
+        checked is that the *wording* is something the code emits."""
+        line = re.sub(r"0x[0-9a-fA-F]{40}", "0x…", line)
+        line = re.sub(r"https?://\S+", "<url>", line)
+        line = re.sub(r"eip155:\d+", "<network>", line)
+        return line.rstrip()
+
+    creds = CdpCredentials(key_id="<key id>",
+                           secret=base64.b64encode(bytes(32)).decode())
+    producible = set()
+    for network, credential, free in product(
+            ("eip155:84532", "eip155:8453", "eip155:31337"), (None, creds), (False, True)):
+        if free and credential is not None:
+            continue  # refused by check(); never rendered
+        config = PaymentConfig(
+            pay_to=None if free else PAYEE, price="$0.01", network=network,
+            facilitator_url=FACILITATOR, free_mode=free, cdp_credentials=credential)
+        producible.update(normalize(line) for line in startup_banner(config, KEY_ID))
+
+    quoted = [normalize(ln) for ln in
+              (Path(__file__).resolve().parents[1] / "README.md").read_text().splitlines()
+              if re.match(r"^\s+(checked:|NOT checked:)", ln)]
+    assert quoted, "no banner continuation lines found in the README"
+    unproducible = [ln for ln in quoted if ln not in producible]
+    assert not unproducible, (
+        "notary/README.md quotes banner lines the code never prints:\n  "
+        + "\n  ".join(unproducible))

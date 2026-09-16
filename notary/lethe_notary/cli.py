@@ -90,6 +90,16 @@ def startup_banner(config: PaymentConfig, key_id: str) -> list[str]:
         f"              checked:     {config.facilitator_url} reports it "
         f"settles 'exact' on {config.network}",
     ]
+    if config.cdp_credentials is not None:
+        # Also a measurement, not a label. Preflight sent a token minted from
+        # this credential; had the facilitator rejected it the process would
+        # have died instead of reaching this line. Worth saying separately
+        # because "a credential is configured" and "the credential works" are
+        # different facts, and only one of them is worth anything.
+        lines.append(
+            f"              checked:     it accepted CDP credential "
+            f"{config.cdp_credentials.key_id} — preflight was authenticated"
+        )
     if kind != "testnet":
         # Only where being wrong costs something. The same gap exists on
         # testnet and is worth nothing there, and a caveat nobody needs is a

@@ -162,6 +162,11 @@ jobs:
               "lethe_notary.service",
               "lethe_notary.payments",
               "lethe_notary.cli",
+              # Mainnet auth. It mints its own JWS from `cryptography` rather
+              # than taking a JWT library as a runtime dependency, and this is
+              # what proves that stayed true: a bare install has no PyJWT, so
+              # importing it here fails the day someone reaches for one.
+              "lethe_notary.cdp_auth",
               "x402",
               "x402.http",
               # The two that a bare install does NOT get. x402.http imports
@@ -172,6 +177,28 @@ jobs:
           ]:
               importlib.import_module(name)
               print("ok", name)
+          PY
+
+      - name: Mainnet auth must work without a JWT library
+        run: |
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import base64, importlib.util
+          from lethe_notary.cdp_auth import CdpAuthProvider, CdpCredentials
+
+          # The point of hand-rolling the JWS: a bare install has no PyJWT,
+          # and mainnet auth still has to work. If this ever passes only
+          # because PyJWT happens to be installed, the assert below says so.
+          assert importlib.util.find_spec("jwt") is None, \
+              "PyJWT is present on a bare install; this check proves nothing"
+
+          provider = CdpAuthProvider(
+              CdpCredentials(key_id="k", secret=base64.b64encode(bytes(32)).decode()),
+              "https://api.example.com/x402",
+          )
+          header = provider.get_auth_headers().settle["Authorization"]
+          assert header.startswith("Bearer "), header
+          print("ok minted a settle token with no JWT library installed")
           PY
 
       - name: A price must be quotable
