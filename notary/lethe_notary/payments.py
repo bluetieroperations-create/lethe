@@ -21,6 +21,7 @@ worthless.
 import logging
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
@@ -116,6 +117,75 @@ def check_network(network: str) -> None:
     )
 
 
+def check_public_url(url: str) -> str:
+    """Validate and canonicalize the origin this notary is reachable at.
+
+    This value is PUBLISHED: it becomes `resource.url` in every 402 challenge,
+    which is the document a catalog indexes against our payout address. Three
+    separate reasons to be strict with it:
+
+    * A catalog entry naming someone else's host, carrying our `payTo`, lends
+      them our settlement history. That is the catalog-poisoning class the
+      Blackwall billing session measured against their own live service on
+      2026-09-15, where the field was echoed from the request. Ours is never
+      request-derived (see `PaymentGate.resource_info`), so the only way a
+      hostile value gets in is the operator configuring one — but a typo'd or
+      pasted-wrong origin is the same outcome, so it is checked.
+    * A catalog renders it. A URL containing a newline, a DEL, or a Unicode
+      line separator is malformed wherever it lands. NOTE: it does *not* forge
+      response-header structure — the challenge is base64'd, so a CR survives
+      as data inside the payload, not as header syntax. A sibling session's
+      writeup said otherwise and this repo repeated it before checking; the
+      check is still right, the reason was not.
+    * An origin can carry a credential in userinfo, and `lethe.anchor` already
+      learned that lesson the hard way: a URL that gets published must not
+      carry one.
+
+    Returns the canonical origin, with any path, query, fragment and userinfo
+    dropped — the origin is all that is wanted, the path is supplied by us.
+    """
+    raw = url.strip()
+    # Printable ASCII only, after trimming the surrounding whitespace. One rule
+    # instead of a blocklist, because a blocklist of control characters missed
+    # DEL (0x7f), U+2028/U+2029, and an ordinary space inside the host — all of
+    # which this accepted before. A non-ASCII host must be punycode-encoded
+    # before it is published anyway, which also disposes of homographs.
+    bad = [c for c in raw if not (0x21 <= ord(c) <= 0x7E)]
+    if bad:
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PUBLIC_URL contains {bad[0]!r}, which is not "
+            f"printable ASCII. This value is published and rendered by a "
+            f"catalog; encode a non-ASCII host as punycode."
+        )
+    if len(raw) > 512:
+        raise PaymentConfigError("LETHE_NOTARY_PUBLIC_URL is unreasonably long (>512)")
+
+    parts = urllib.parse.urlsplit(raw)
+    if parts.scheme not in ("https", "http"):
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PUBLIC_URL={url!r} must be an absolute http(s) URL. "
+            f"A scheme-relative or javascript:/data: value is not an origin."
+        )
+    # Everything after the last "@" is host[:port], taken verbatim so an IPv6
+    # authority keeps its brackets (the same care lethe.anchor takes).
+    host = parts.netloc.rpartition("@")[2]
+    if not host:
+        raise PaymentConfigError(f"LETHE_NOTARY_PUBLIC_URL={url!r} names no host")
+    if parts.netloc != host:
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PUBLIC_URL={url!r} carries credentials in its "
+            f"userinfo. This value is published; strip them."
+        )
+    if parts.scheme == "http" and host.partition(":")[0].lower() not in (
+            "localhost", "127.0.0.1", "[::1]"):
+        raise PaymentConfigError(
+            f"LETHE_NOTARY_PUBLIC_URL={url!r} is plaintext http. A catalog entry "
+            f"pointing at http invites a downgrade; use https (http is allowed "
+            f"only for localhost during development)."
+        )
+    return urllib.parse.urlunsplit((parts.scheme, host, "", "", ""))
+
+
 def check_pay_to(pay_to: str, network: str) -> None:
     """Reject an address that cannot possibly receive money.
 
@@ -166,6 +236,10 @@ class PaymentConfig:
     network: str
     facilitator_url: str
     free_mode: bool = False
+    # The origin this notary is reachable at, canonicalized by
+    # check_public_url. Optional: without it the 402 carries no resource
+    # identity, which is legal x402 but not indexable by a catalog.
+    public_url: str | None = None
 
     @classmethod
     def from_env(cls, environ=None) -> "PaymentConfig":
@@ -192,6 +266,11 @@ class PaymentConfig:
                 "LETHE_NOTARY_FACILITATOR", "https://x402.org/facilitator"
             ),
             free_mode=free,
+            # Canonicalized here rather than in check(), because the value
+            # stored must be the cleaned one — the raw string is never used.
+            public_url=(check_public_url(public_url)
+                        if (public_url := env.get("LETHE_NOTARY_PUBLIC_URL"))
+                        else None),
         )
         config.check()
         return config
@@ -267,6 +346,80 @@ class PaymentGate:
             price=self.config.price,
             network=self.config.network,
         )
+
+    # The notary's ONE priced route. Not a variable: this service sells exactly
+    # one thing, so the resource path is ours and is never taken from the
+    # request. That is the whole defence against the catalog-poisoning class
+    # the Blackwall billing session measured on 2026-09-15 — where a
+    # client-supplied `resource` came back inside a 402 advertising their
+    # payTo, lending an attacker their settlement history for one minimum
+    # payment. We do not sanitize a request field; there is no request field.
+    PAID_PATH = "/notarize"
+
+    def resource_info(self) -> Any:
+        """The resource identity a catalog indexes, or None if unconfigured.
+
+        `resource.url` is `<operator's configured origin> + /notarize`. Both
+        halves are ours. Absent LETHE_NOTARY_PUBLIC_URL there is no identity to
+        publish and the 402 carries none, which is valid x402 — it just cannot
+        be catalogued.
+        """
+        if not self.config.public_url:
+            return None
+        from x402 import ResourceInfo
+
+        return ResourceInfo(
+            url=self.config.public_url + self.PAID_PATH,
+            description=(
+                "Countersigns a Lethe deletion certificate: verifies it is "
+                "internally valid, records the audit head it names, and returns "
+                "a signed receipt binding both to an independent clock."
+            ),
+            mime_type="application/json",
+            service_name="lethe-notary",
+            tags=["gdpr", "ccpa", "deletion", "compliance", "attestation", "audit"],
+        )
+
+    def bazaar_extensions(self) -> dict[str, Any] | None:
+        """The input/output sketch a catalog shows a buyer, or None.
+
+        Measured convention, from 2000 catalogued entries: `bazaar.info` and
+        `bazaar.schema` are present on every one. This describes what the money
+        buys, which is the only thing a buyer needs before paying.
+        """
+        if not self.config.public_url:
+            return None
+        return {
+            "bazaar": {
+                "info": {
+                    "name": "lethe-notary",
+                    "summary": "Independent countersignature on a deletion certificate.",
+                    "docs": "https://github.com/bluetieroperations-create/lethe/tree/main/notary",
+                },
+                "schema": {
+                    "properties": {
+                        "input": {"properties": {"body": {
+                            "type": "object",
+                            "description": "A Lethe deletion certificate (lethe.cert/3).",
+                            "required": ["payload", "payload_hash", "signature"],
+                            "properties": {
+                                "payload": {"type": "object"},
+                                "payload_hash": {"type": "string"},
+                                "signature": {"type": "string"},
+                            },
+                        }}},
+                        "output": {"properties": {"example": {
+                            "ok": True,
+                            "receipt": {"payload": {"schema": "lethe.notary/1"},
+                                        "signature": "<base64 ed25519>"},
+                            "charged": True,
+                            "already_witnessed": False,
+                            "witness_recorded": True,
+                        }}},
+                    }
+                },
+            }
+        }
 
     def server(self) -> Any:
         """Build the x402 resource server on first use.
@@ -352,7 +505,11 @@ class PaymentGate:
         header = request.headers.get(PAYMENT_SIGNATURE_HEADER)
 
         if not header:
-            required = server.create_payment_required_response(requirements)
+            required = server.create_payment_required_response(
+                requirements,
+                resource=self.resource_info(),
+                extensions=self.bazaar_extensions(),
+            )
             return JSONResponse(
                 {"ok": False, "error": {
                     "code": "PAYMENT_REQUIRED",

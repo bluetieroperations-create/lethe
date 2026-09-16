@@ -179,6 +179,7 @@ from it, and every receipt already issued becomes unverifiable if it is lost.
 | `LETHE_NOTARY_NETWORK` | `eip155:84532` | CAIP-2 only — see below |
 | `LETHE_NOTARY_FACILITATOR` | `https://x402.org/facilitator` | must be https |
 | `LETHE_NOTARY_FREE` | unset | run without charging, deliberately |
+| `LETHE_NOTARY_PUBLIC_URL` | unset | the origin this notary answers on; publishes a catalogable resource identity — see below |
 
 It **fails to start** rather than serve wrongly: no `PAY_TO` and no explicit
 `FREE=1` is a startup error, because one missing environment variable on a
@@ -193,6 +194,54 @@ requirements from an alias, and the facilitator even advertises both forms —
 but a paying client normalizes to CAIP-2, finds no match, and refuses with *no
 payment requirements match registered schemes*. The notary looks healthy and
 nobody can buy anything. Startup refuses an alias and names the CAIP-2 form.
+
+### Being catalogable
+
+A paid x402 service is indexed by catalogs from its **402 challenge**. Set the
+origin the notary answers on and the challenge grows a resource identity:
+
+```bash
+export LETHE_NOTARY_PUBLIC_URL=https://notary.example.com
+```
+
+The 402 then carries `resource` (an absolute URL), `extensions.bazaar.info` and
+`extensions.bazaar.schema` — the three fields present on every one of 2000
+catalogued entries sampled on 2026-09-15. Without it the 402 is still valid
+x402 and the notary works normally; it simply cannot be catalogued. Publishing
+a guessed origin would be worse than publishing none.
+
+**The resource url is never taken from the request, and that is deliberate.**
+A sibling x402 service measured the alternative live on 2026-09-15: it echoed a
+client-supplied `resource` back into its 402, so an attacker could pay the
+minimum with `resource=https://evil.example/owned` and get **their** url
+catalogued **against the victim's payout address** — borrowing a settlement
+history for the price of one call, and publishing a `javascript:` URL into a
+catalog UI on the way.
+
+The notary cannot be used that way, for reasons that stack:
+
+* It sells exactly **one** resource, so the path is a constant (`/notarize`),
+  not a request parameter. There is no field to echo.
+* The origin comes from `LETHE_NOTARY_PUBLIC_URL`, never from the request — not
+  from `Host`, not from `X-Forwarded-Host`. A spoofed `Host` changes nothing.
+* The certificate schema is closed (`additionalProperties: false`), so a
+  request carrying a `resource` key is rejected before anything else runs.
+
+`LETHE_NOTARY_PUBLIC_URL` is itself validated at startup, because it *is*
+published: absolute http(s) only (so `javascript:`, `data:` and `//host/x` are
+out), no userinfo (a credential must never be published — the lesson
+`lethe.anchor` already learned), printable ASCII only (which
+disposes of newlines, DEL, Unicode line separators, a space inside the host,
+and non-ASCII homographs — punycode a non-ASCII host first), https unless the
+host is localhost, and length-capped. Path, query and fragment are dropped: the
+path is ours to supply.
+
+One claim worth not repeating: a control character here does **not** forge
+response-header structure. The challenge is base64'd, so a `\r` survives as
+data inside the payload, not as header syntax — verified. The check is still
+right, because a catalog renders this value and a URL with a newline in it is
+malformed wherever it lands; the header-forgery reason was inherited from
+another project's writeup and repeated here before it was checked.
 
 ### Going to mainnet
 
@@ -257,19 +306,36 @@ Check the payee **before** the first real payment, not after. `PAY_TO` is
 checked for shape and EIP-55 checksum, which catches placeholders and typos —
 it cannot tell whether you control the address, and nothing later will.
 
-The startup banner says which kind of money is being charged, because the two
-configurations are one environment variable apart and otherwise print the same
-line:
+The startup banner says so out loud, because the two configurations are one
+environment variable apart and otherwise print the same line. On testnet:
 
 ```
 lethe-notary  key_id=…  $0.01 on eip155:84532 [TESTNET - payments are not real money]
-lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
+              checked:     https://x402.org/facilitator reports it settles 'exact' on eip155:84532
 ```
 
+On mainnet, where being wrong costs money, it also prints what it has *not*
+checked. (The facilitator is elided because mainnet needs one that settles it,
+which is the code that has not landed — see above; `x402.org/facilitator` would
+not get this far, it is refused at preflight.)
+
+```
+lethe-notary  key_id=…  $0.01 on eip155:8453 [MAINNET - real money]
+              checked:     https://… reports it settles 'exact' on eip155:8453
+              NOT checked: that you control 0x… — no code here can tell. Send one payment and confirm it arrives.
+              NOT checked: that any payment has succeeded. This line means configured, not earning.
+```
+
+Only the `checked:` line is a measurement: preflight fetched the facilitator's
+`/supported` and it listed `exact` on this network. Everything else on the
+banner is a label on an environment variable, and the banner says which is
+which rather than letting a printed address read as a verified one.
+
 An unrecognized network id says `[unrecognized network - verify before
-serving]` rather than guessing. `/.well-known/notary` reports the same thing as
-`network_kind`, so a paying agent does not need its own table of chain ids to
-know what it is being quoted in.
+serving]` rather than guessing, and takes the mainnet caveats — unknown might
+be real money. `/.well-known/notary` reports the same `network_kind`, so a
+paying agent does not need its own table of chain ids to know what it is being
+quoted in.
 
 ## Relationship to `lethe`
 

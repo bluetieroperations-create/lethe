@@ -13,6 +13,31 @@ that issued it.
 
 ### Added
 
+- **The notary can be catalogued now, and cannot be used to poison a catalog.**
+  Setting `LETHE_NOTARY_PUBLIC_URL` gives the 402 challenge a `resource`
+  identity plus `extensions.bazaar.info` and `.schema` — the three fields
+  present on every one of 2000 catalogued x402 entries sampled 2026-09-15.
+  Without it the notary works exactly as before and is simply not indexable.
+
+  Adding that field is also how a sibling service acquired a live
+  vulnerability, measured the same day: it echoed the client's `resource` back
+  into its own 402, so an attacker could pay the minimum and have **their** url
+  catalogued **against the victim's payout address**. The notary is immune by
+  construction rather than by sanitizing: it sells exactly one resource, so the
+  path is the constant `/notarize`; the origin is operator config and is never
+  read from the request, including `Host` and `X-Forwarded-Host`; and the
+  certificate schema is closed, so a request carrying a `resource` key is a 422
+  before anything else runs. All three are pinned by tests — one asserts
+  `resource_info()` takes no request parameter, so the day it grows one is the
+  day CI says so.
+
+  `LETHE_NOTARY_PUBLIC_URL` is validated at startup because it is published:
+  absolute http(s) only, no userinfo, printable ASCII only, https off
+  localhost, length-capped, canonicalized to its origin. (The printable-ASCII
+  rule replaced a control-character blocklist that let DEL, U+2028 and a space
+  inside the host through, and the localhost comparison was case-sensitive so
+  `HTTP://LOCALHOST` was wrongly refused. Both found by auditing before merge.)
+
 - **`docs/fleet-reset.md`** — a design note on a second target shape: restoring
   a fleet of agents to an attested baseline, rather than deleting one data
   subject's records. Nothing is built. It exists because
@@ -26,6 +51,23 @@ that issued it.
   persona" would be semantic and should not be built.
 
 ### Fixed
+
+- **The startup banner read as a readiness signal and was not one.** It printed
+  the price, the network and — via the config it echoed — an implication that
+  the service was set up to be paid. Exactly one of its claims had been checked
+  against the world: preflight asks the facilitator whether it settles `exact`
+  on this network. Whether the operator *controls* the payee cannot be checked
+  by any code here, and on mainnet being wrong means a notary that starts
+  cleanly while every payment lands in a wallet the operator cannot open. The
+  banner now separates the two — one `checked:` line naming the facilitator
+  actually asked, and on mainnet two `NOT checked:` lines, including the payee
+  printed back so a typo is readable. Testnet gets neither, because the same
+  gap is worth nothing there and a caveat nobody needs is a caveat everybody
+  learns to skip, including on the run where it is the mainnet one.
+  Unrecognized network ids take the mainnet caveats rather than the testnet
+  silence. Extracted to `startup_banner()` so it is testable without binding a
+  port; the twelve tests are mutation-checked against nine ways to make the
+  banner lie, and all nine fail at least one test.
 
 - **`LETHE_NOTARY_FREE=1` silently won over a configured `LETHE_NOTARY_PAY_TO`.**
   Two contradictory instructions — charge nobody, and here is who to pay — and

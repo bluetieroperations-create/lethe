@@ -8,6 +8,7 @@ from lethe_notary.payments import (
     PaymentConfig,
     PaymentConfigError,
     PaymentGate,
+    check_public_url,
     network_kind,
 )
 from lethe_notary.service import create_app
@@ -374,3 +375,110 @@ def test_free_mode_alone_is_still_allowed():
     config = PaymentConfig.from_env({"LETHE_NOTARY_FREE": "1"})
     assert config.free_mode is True
     assert config.pay_to is None
+
+
+# -- Bazaar listability, and the vulnerability it would have introduced -------
+#
+# Adding a `resource` field to the 402 is what makes a paid x402 service
+# catalogable. It is also exactly the field that, when echoed from the request,
+# lets an attacker pay the minimum and get THEIR url catalogued against YOUR
+# payout address — measured live against a sibling service on 2026-09-15. These
+# tests exist to keep the field present and keep it ours.
+
+def _paid_gate(**overrides):
+    cfg = {"pay_to": PAYEE, "price": "$0.01", "network": "eip155:84532",
+           "facilitator_url": "https://x402.org/facilitator",
+           "public_url": "https://notary.example.com"}
+    cfg.update(overrides)
+    return PaymentGate(PaymentConfig(**cfg))
+
+
+def test_the_resource_url_is_our_origin_and_our_path():
+    """Both halves are ours. The notary sells exactly one thing, so there is no
+    per-request resource identity to take from the caller — which is why the
+    catalog-poisoning class cannot reach us by construction rather than by
+    sanitizing a field."""
+    info = _paid_gate().resource_info()
+    assert info.url == "https://notary.example.com/notarize"
+    assert info.service_name == "lethe-notary"
+
+
+def test_resource_info_takes_no_request_parameter():
+    """The structural guarantee, asserted rather than assumed: if this ever
+    grows a request argument, the field becomes attacker-influenceable and this
+    test is where that gets noticed."""
+    import inspect
+    params = list(inspect.signature(PaymentGate.resource_info).parameters)
+    assert params == ["self"], f"resource_info grew a parameter: {params}"
+
+
+def test_the_catalog_fields_are_all_present():
+    """The convention measured across 2000 catalogued entries: every one has
+    `resource`, `extensions.bazaar.info` and `extensions.bazaar.schema`.
+    Missing any of the three is what 'structurally unlistable' meant."""
+    gate = _paid_gate()
+    assert gate.resource_info() is not None
+    bazaar = gate.bazaar_extensions()["bazaar"]
+    assert "info" in bazaar
+    assert "schema" in bazaar
+    assert set(bazaar["schema"]["properties"]) == {"input", "output"}
+
+
+def test_without_a_public_url_there_is_no_resource_identity():
+    """Unconfigured is not broken. A 402 with no resource is valid x402; it
+    simply cannot be catalogued. Publishing a guessed origin would be worse
+    than publishing none."""
+    gate = _paid_gate(public_url=None)
+    assert gate.resource_info() is None
+    assert gate.bazaar_extensions() is None
+
+
+@pytest.mark.parametrize("hostile", [
+    "https://notary.example.com\x7f",          # DEL — a blocklist of <0x20 missed it
+    "https://notary.example.com\u2028x",       # Unicode line separator — likewise
+    "https://not ary.example.com",             # a space inside the host
+    "https://n\u00f6tary.example.com",         # non-ASCII host; punycode it first
+    "//evil.example/x",
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "https://user:password@notary.example.com",
+    "http://notary.example.com",
+    "https://notary.example.com/\r\nX-Injected: yes",
+    "notarealurl",
+    "",
+])
+def test_a_hostile_public_url_is_refused(hostile):
+    """This value is published into a response header and indexed by a catalog.
+    Scheme-relative and javascript:/data: are not origins; userinfo is a
+    credential that must never be published (the lesson lethe.anchor already
+    learned); plaintext http invites a downgrade; a control character forges
+    header structure in the base64'd header."""
+    with pytest.raises(PaymentConfigError):
+        check_public_url(hostile)
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("https://notary.example.com", "https://notary.example.com"),
+    ("https://notary.example.com/ignored?q=1#frag", "https://notary.example.com"),
+    ("  https://notary.example.com  ", "https://notary.example.com"),
+    ("http://localhost:8402", "http://localhost:8402"),
+    # Hostnames are case-insensitive; this was wrongly refused as "plaintext
+    # http off localhost" because the comparison was case-sensitive.
+    ("HTTP://LOCALHOST:8402", "http://LOCALHOST:8402"),
+    ("http://127.0.0.1:8402", "http://127.0.0.1:8402"),
+    ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443"),
+])
+def test_a_public_url_is_canonicalized_to_its_origin(given, expected):
+    """Path, query and fragment are dropped — the path is ours to supply. The
+    IPv6 case is here because reassembling from .hostname/.port loses the
+    brackets and yields an unparseable URL, which is the bug lethe.anchor hit."""
+    assert check_public_url(given) == expected
+
+
+def test_the_public_url_reaches_the_config_canonicalized():
+    config = PaymentConfig.from_env({
+        "LETHE_NOTARY_PAY_TO": PAYEE,
+        "LETHE_NOTARY_NETWORK": "eip155:84532",
+        "LETHE_NOTARY_PUBLIC_URL": "https://notary.example.com/whatever?x=1",
+    })
+    assert config.public_url == "https://notary.example.com"
