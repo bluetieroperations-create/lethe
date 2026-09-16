@@ -434,6 +434,10 @@ def test_without_a_public_url_there_is_no_resource_identity():
 
 
 @pytest.mark.parametrize("hostile", [
+    "https://notary.example.com\x7f",          # DEL — a blocklist of <0x20 missed it
+    "https://notary.example.com\u2028x",       # Unicode line separator — likewise
+    "https://not ary.example.com",             # a space inside the host
+    "https://n\u00f6tary.example.com",         # non-ASCII host; punycode it first
     "//evil.example/x",
     "javascript:alert(1)",
     "data:text/html,<script>alert(1)</script>",
@@ -458,6 +462,10 @@ def test_a_hostile_public_url_is_refused(hostile):
     ("https://notary.example.com/ignored?q=1#frag", "https://notary.example.com"),
     ("  https://notary.example.com  ", "https://notary.example.com"),
     ("http://localhost:8402", "http://localhost:8402"),
+    # Hostnames are case-insensitive; this was wrongly refused as "plaintext
+    # http off localhost" because the comparison was case-sensitive.
+    ("HTTP://LOCALHOST:8402", "http://LOCALHOST:8402"),
+    ("http://127.0.0.1:8402", "http://127.0.0.1:8402"),
     ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443"),
 ])
 def test_a_public_url_is_canonicalized_to_its_origin(given, expected):

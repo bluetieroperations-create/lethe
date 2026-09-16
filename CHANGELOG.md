@@ -32,8 +32,11 @@ that issued it.
   day CI says so.
 
   `LETHE_NOTARY_PUBLIC_URL` is validated at startup because it is published:
-  absolute http(s) only, no userinfo, no control characters, https off
-  localhost, length-capped, canonicalized to its origin.
+  absolute http(s) only, no userinfo, printable ASCII only, https off
+  localhost, length-capped, canonicalized to its origin. (The printable-ASCII
+  rule replaced a control-character blocklist that let DEL, U+2028 and a space
+  inside the host through, and the localhost comparison was case-sensitive so
+  `HTTP://LOCALHOST` was wrongly refused. Both found by auditing before merge.)
 
 - **`docs/fleet-reset.md`** — a design note on a second target shape: restoring
   a fleet of agents to an attested baseline, rather than deleting one data

@@ -131,8 +131,12 @@ def check_public_url(url: str) -> str:
       request-derived (see `PaymentGate.resource_info`), so the only way a
       hostile value gets in is the operator configuring one — but a typo'd or
       pasted-wrong origin is the same outcome, so it is checked.
-    * The value is base64'd into a response header, where a control character
-      forges header structure.
+    * A catalog renders it. A URL containing a newline, a DEL, or a Unicode
+      line separator is malformed wherever it lands. NOTE: it does *not* forge
+      response-header structure — the challenge is base64'd, so a CR survives
+      as data inside the payload, not as header syntax. A sibling session's
+      writeup said otherwise and this repo repeated it before checking; the
+      check is still right, the reason was not.
     * An origin can carry a credential in userinfo, and `lethe.anchor` already
       learned that lesson the hard way: a URL that gets published must not
       carry one.
@@ -141,10 +145,17 @@ def check_public_url(url: str) -> str:
     dropped — the origin is all that is wanted, the path is supplied by us.
     """
     raw = url.strip()
-    if any(ch in raw for ch in "\r\n\t\x00") or any(ord(c) < 0x20 for c in raw):
+    # Printable ASCII only, after trimming the surrounding whitespace. One rule
+    # instead of a blocklist, because a blocklist of control characters missed
+    # DEL (0x7f), U+2028/U+2029, and an ordinary space inside the host — all of
+    # which this accepted before. A non-ASCII host must be punycode-encoded
+    # before it is published anyway, which also disposes of homographs.
+    bad = [c for c in raw if not (0x21 <= ord(c) <= 0x7E)]
+    if bad:
         raise PaymentConfigError(
-            "LETHE_NOTARY_PUBLIC_URL contains a control character. It is "
-            "published in a response header, where that forges header structure."
+            f"LETHE_NOTARY_PUBLIC_URL contains {bad[0]!r}, which is not "
+            f"printable ASCII. This value is published and rendered by a "
+            f"catalog; encode a non-ASCII host as punycode."
         )
     if len(raw) > 512:
         raise PaymentConfigError("LETHE_NOTARY_PUBLIC_URL is unreasonably long (>512)")
@@ -165,7 +176,8 @@ def check_public_url(url: str) -> str:
             f"LETHE_NOTARY_PUBLIC_URL={url!r} carries credentials in its "
             f"userinfo. This value is published; strip them."
         )
-    if parts.scheme == "http" and host.partition(":")[0] not in ("localhost", "127.0.0.1", "[::1]"):
+    if parts.scheme == "http" and host.partition(":")[0].lower() not in (
+            "localhost", "127.0.0.1", "[::1]"):
         raise PaymentConfigError(
             f"LETHE_NOTARY_PUBLIC_URL={url!r} is plaintext http. A catalog entry "
             f"pointing at http invites a downgrade; use https (http is allowed "

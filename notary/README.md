@@ -230,10 +230,18 @@ The notary cannot be used that way, for reasons that stack:
 `LETHE_NOTARY_PUBLIC_URL` is itself validated at startup, because it *is*
 published: absolute http(s) only (so `javascript:`, `data:` and `//host/x` are
 out), no userinfo (a credential must never be published — the lesson
-`lethe.anchor` already learned), no control characters (the value is base64'd
-into a response header, where a newline forges header structure), https unless
-the host is localhost, and length-capped. Path, query and fragment are dropped:
-the path is ours to supply.
+`lethe.anchor` already learned), printable ASCII only (which
+disposes of newlines, DEL, Unicode line separators, a space inside the host,
+and non-ASCII homographs — punycode a non-ASCII host first), https unless the
+host is localhost, and length-capped. Path, query and fragment are dropped: the
+path is ours to supply.
+
+One claim worth not repeating: a control character here does **not** forge
+response-header structure. The challenge is base64'd, so a `\r` survives as
+data inside the payload, not as header syntax — verified. The check is still
+right, because a catalog renders this value and a URL with a newline in it is
+malformed wherever it lands; the header-forgery reason was inherited from
+another project's writeup and repeated here before it was checked.
 
 ### Going to mainnet
 
