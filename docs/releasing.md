@@ -95,3 +95,58 @@ requires `lethe-delete>=0.7` and no such version was public.
 
 Tagging without publishing is the same drift the Release workflow was written
 to stop, one layer down. Hence: same tag, same run, both artifacts.
+
+## Releasing `lethe-notary`
+
+`lethe-notary` is a second distribution in this repo with **its own version
+line and its own tag namespace**. A `v*` tag releases `lethe-delete` and says
+nothing about the notary; a `notary-v*` tag releases the notary and says
+nothing about `lethe-delete`. Tying them together would force one package to
+take a version number because the other moved.
+
+```bash
+# 1. bump notary/pyproject.toml  ->  version = "0.2.0"
+# 2. commit, merge to main
+git tag notary-v0.2.0 && git push origin notary-v0.2.0
+```
+
+`.github/workflows/release-notary.yml` does the rest, with the same guards the
+root workflow has: the tag must look like a release tag, the checkout must
+actually be sitting on that tag's commit, the tag must match
+`notary/pyproject.toml`, and the built artifacts must carry that version — all
+before anything reaches PyPI, because a version can never be re-uploaded.
+
+**PyPI only — no GitHub Release.** The root workflow builds its notes from
+`CHANGELOG.md` so the release and the changelog cannot tell different stories,
+and that changelog is versioned to `lethe-delete`: there is no section that
+means the notary. Inventing one would be the exact drift that guard exists to
+prevent. The tag is the record until the notary has a changelog of its own.
+
+### First publish: a *pending* publisher
+
+The usual Trusted Publisher page lives under a project's settings, and a
+project that has never been published **has no settings page**. So the first
+one is added as a *pending* publisher instead, at
+<https://pypi.org/manage/account/publishing/>:
+
+| Field | Value |
+|---|---|
+| PyPI Project Name | `lethe-notary` |
+| Owner | `bluetieroperations-create` |
+| Repository name | `lethe` |
+| Workflow name | `release-notary.yml` |
+| Environment name | *(leave blank)* |
+
+Same two traps as `lethe-delete`. **Workflow name is the filename** —
+`release-notary.yml`, not the display name `Release notary`. And **Environment
+must be blank**, because the job declares none; PyPI matches on it when set,
+and a mismatch fails every publish.
+
+Once the first upload succeeds the pending publisher becomes a normal one under
+the project's own settings, and nothing further is needed.
+
+If it fails, the publish step prints **PyPI's own response body**, which names
+the claim that did not match, and fails before `twine upload` — nothing
+half-publishes. A `notary-v*` tag whose upload failed can be retried without
+burning a version number: run the **Release notary** workflow by hand
+(`workflow_dispatch`) with that tag as the input.

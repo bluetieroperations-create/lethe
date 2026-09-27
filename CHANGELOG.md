@@ -13,6 +13,22 @@ that issued it.
 
 ### Added
 
+- **`lethe-notary` is publishable.** It has lived in this repo since it was
+  written and has never been on PyPI, so every fix in the entries below —
+  mainnet auth, the catalog identity, the honest banner, the contradictory-config
+  refusals — reached only people who clone the repo. `notary-v*` tags now
+  publish it through `.github/workflows/release-notary.yml`, with the same
+  guards the root release has and its own version line, so the two packages
+  never take version numbers because the other moved.
+
+  Its packaging metadata was incomplete in a way that only shows up once, and
+  permanently: no `readme`, so the PyPI page would have been **blank**; no
+  license, classifiers, keywords or project URLs. A published version's
+  metadata cannot be amended, only superseded, so this was found by building
+  the thing and reading what PyPI would have received. First release is
+  **0.2.0** rather than the 0.1.1 sitting in the file, because two features
+  landed after that number was stamped and 0.1.1 was never public anyway.
+
 - **The notary can settle on mainnet.** It never could: every keyless
   facilitator this repo probed advertises testnet only, the ones that settle
   real money want a credential, and the notary sent none — so mainnet was not a
