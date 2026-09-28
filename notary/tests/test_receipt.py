@@ -1,13 +1,13 @@
 """What a receipt may and may not say."""
 
 import pytest
-from conftest import make_cert
 from lethe_notary.receipt import (
     NotarizationRefused,
     binds_certificate,
     build_receipt,
     verify_receipt,
 )
+from notary_certs import make_cert
 
 from lethe.signing import Signer, key_id_for
 
