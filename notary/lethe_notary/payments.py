@@ -132,9 +132,24 @@ _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 
 
 def _is_loopback(authority: str) -> bool:
-    """True when `host[:port]` names this machine."""
-    return authority.rpartition(":")[0].lower() in _LOOPBACK_HOSTS \
-        or authority.lower() in _LOOPBACK_HOSTS
+    """True when the authority's HOST names this machine.
+
+    The host is what follows the last "@" — everything before it is userinfo,
+    and userinfo is attacker-controlled text that is allowed to look like
+    anything. Written without that step first, and it was a real bypass:
+
+        http://localhost:8402@evil.example/x402
+
+    reads as loopback if you split on ":" and take the left side, while the
+    request actually goes to evil.example in plaintext. Found by probing this
+    function rather than by reading it.
+    """
+    host = authority.rpartition("@")[2]
+    # An IPv6 literal keeps its brackets — they are part of the host, and the
+    # colons inside them are not port separators.
+    host = (host.partition("]")[0] + "]" if host.startswith("[")
+            else host.partition(":")[0])
+    return host.lower() in _LOOPBACK_HOSTS
 
 
 def check_public_url(url: str) -> str:
@@ -279,8 +294,18 @@ class PaymentConfig:
         It stopped being survivable when `lethe-notary` went on PyPI, because
         constructing the config yourself is now the obvious way to embed the
         notary in something else, and it was the one path with no guards on it.
+
+        `public_url` is canonicalized here rather than only in `from_env` for
+        the same reason, and it is the field where being wrong costs most: it
+        is PUBLISHED, as `resource.url` in every 402 challenge. Left to
+        `from_env`, a directly-built config could carry `javascript:alert(1)`
+        or a credential in its userinfo straight into a catalog entry.
         """
         self.check()
+        if self.public_url is not None:
+            # frozen=True, so normalize through object.__setattr__ — the same
+            # thing `from_env` does before calling the constructor.
+            object.__setattr__(self, "public_url", check_public_url(self.public_url))
 
     @classmethod
     def from_env(cls, environ=None) -> "PaymentConfig":
@@ -307,11 +332,9 @@ class PaymentConfig:
                 "LETHE_NOTARY_FACILITATOR", "https://x402.org/facilitator"
             ),
             free_mode=free,
-            # Canonicalized here rather than in check(), because the value
-            # stored must be the cleaned one — the raw string is never used.
-            public_url=(check_public_url(public_url)
-                        if (public_url := env.get("LETHE_NOTARY_PUBLIC_URL"))
-                        else None),
+            # Passed raw: __post_init__ canonicalizes it, so this path and a
+            # direct construction cannot end up storing different things.
+            public_url=env.get("LETHE_NOTARY_PUBLIC_URL") or None,
             cdp_credentials=CdpCredentials.from_env(env),
         )
         # __post_init__ already ran check(); construction cannot produce an

@@ -123,14 +123,26 @@ that issued it.
   now runs `check()`, so an invalid `PaymentConfig` cannot be constructed at
   all.
 
+  `public_url` is canonicalized there too, and it is the field where being
+  wrong costs most: it is **published**, as `resource.url` in every 402
+  challenge. Canonicalizing it inside `from_env` alone meant a directly-built
+  config could carry `javascript:alert(1)`, or a credential in its userinfo,
+  straight into a catalog entry — the same bug one field over, on the one
+  field that other people read.
+
   One rule had to be relaxed to make that safe rather than merely strict: a
   facilitator on **loopback** may be plaintext `http`. There is no network
   there to intercept, it is the local-development and test case, and a rule
   that forbids something people legitimately do is a rule that gets routed
   around instead of obeyed. The carve-out is loopback, not "looks local" —
   `localhost.evil.example` resolves to whatever its owner wants, and is
-  refused. `LETHE_NOTARY_PUBLIC_URL` already had this carve-out; the two now
-  share one definition instead of two that had already drifted.
+  refused — and so is `http://localhost:8402@evil.example`, which reads as
+  loopback to anything that splits the authority on `:` and takes the left
+  side, while the request goes to `evil.example` in plaintext carrying what
+  was paid. That was a live bypass in the first version of this change, found
+  by probing the function rather than reading it.
+  `LETHE_NOTARY_PUBLIC_URL` already had this carve-out; the two now share one
+  definition instead of two that had already drifted.
 
   Three tests had to be rewritten because the states they constructed are now
   unreachable, which is the point: a free config carrying a payee, a free

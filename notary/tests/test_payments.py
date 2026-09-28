@@ -550,3 +550,57 @@ def test_a_plaintext_facilitator_anywhere_else_is_still_refused(url):
         PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
                       facilitator_url=url)
     assert "must be https" in str(e.value)
+
+
+@pytest.mark.parametrize("authority,loopback", [
+    ("localhost:8402", True), ("127.0.0.1:8402", True), ("[::1]:8402", True),
+    ("[::1]", True), ("127.0.0.1", True), ("LOCALHOST", True),
+    # The host is what follows the last "@"; everything before it is userinfo,
+    # which is attacker-controlled text allowed to look like anything.
+    ("evil.example:80@localhost", True),
+    ("localhost:8402@evil.example", False),
+    ("localhost@evil.example", False),
+    ("user:localhost@evil.example", False),
+    ("[::1]@evil.example", False),
+    ("evil.example", False), ("localhost.evil.example", False),
+    ("192.168.1.10:8402", False),
+])
+def test_loopback_is_decided_by_the_host_not_the_userinfo(authority, loopback):
+    """Found by probing this rather than reading it. Splitting the authority on
+    ":" and taking the left side reads `localhost:8402@evil.example` as
+    loopback, while the request goes to evil.example — in plaintext, carrying
+    what was paid."""
+    from lethe_notary.payments import _is_loopback
+    assert _is_loopback(authority) is loopback
+
+
+def test_userinfo_cannot_smuggle_a_remote_facilitator_past_the_https_rule():
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url="http://localhost:8402@evil.example/x402")
+    assert "must be https" in str(e.value)
+
+
+@pytest.mark.parametrize("bad", [
+    "javascript:alert(1)", "http://evil.example", "https://u:pw@h/x", "//evil.example/x",
+])
+def test_a_published_origin_is_checked_on_direct_construction_too(bad):
+    """`public_url` becomes `resource.url` in every 402 challenge — the value a
+    catalog indexes against our payout address. It was canonicalized inside
+    `from_env`, which meant a directly-built config could carry a javascript:
+    URL or a credential in its userinfo straight into a published document.
+    The same bug as validating only from the environment, one field over, and
+    on the field where being wrong costs most.
+    """
+    with pytest.raises(PaymentConfigError):
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url="https://f", public_url=bad)
+
+
+def test_a_published_origin_is_canonicalized_on_direct_construction_too():
+    """Not just validated — reduced to its origin, so `from_env` and a direct
+    construction cannot store different things for the same input."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url="https://f",
+                           public_url="https://notary.example.com/ignored?q=1#f")
+    assert config.public_url == "https://notary.example.com"
