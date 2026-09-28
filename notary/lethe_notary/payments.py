@@ -124,6 +124,19 @@ def check_network(network: str) -> None:
     )
 
 
+# Plaintext http is refused everywhere it names a remote host, and allowed on
+# the loopback interface, where there is no network for anyone to sit on. One
+# definition rather than two, because these rules were written apart and the
+# second one silently omitted `[::1]` for a while.
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+
+
+def _is_loopback(authority: str) -> bool:
+    """True when `host[:port]` names this machine."""
+    return authority.rpartition(":")[0].lower() in _LOOPBACK_HOSTS \
+        or authority.lower() in _LOOPBACK_HOSTS
+
+
 def check_public_url(url: str) -> str:
     """Validate and canonicalize the origin this notary is reachable at.
 
@@ -183,8 +196,7 @@ def check_public_url(url: str) -> str:
             f"LETHE_NOTARY_PUBLIC_URL={url!r} carries credentials in its "
             f"userinfo. This value is published; strip them."
         )
-    if parts.scheme == "http" and host.partition(":")[0].lower() not in (
-            "localhost", "127.0.0.1", "[::1]"):
+    if parts.scheme == "http" and not _is_loopback(host):
         raise PaymentConfigError(
             f"LETHE_NOTARY_PUBLIC_URL={url!r} is plaintext http. A catalog entry "
             f"pointing at http invites a downgrade; use https (http is allowed "
@@ -253,6 +265,23 @@ class PaymentConfig:
     # CdpCredentials.__repr__.
     cdp_credentials: "CdpCredentials | None" = None
 
+    def __post_init__(self) -> None:
+        """Validate on construction, not only via `from_env`.
+
+        `check()` used to be called by `from_env` alone, so every guard in it —
+        a payee that cannot receive money, an alias network no client will
+        match, a plaintext facilitator, FREE=1 next to a payee — applied to
+        operators setting environment variables and to nobody else. Anything
+        that built a `PaymentConfig` directly got an object that looks valid,
+        type-checks, and quotes prices to an address that does not exist.
+
+        That was survivable while the only caller was this repo's own `serve`.
+        It stopped being survivable when `lethe-notary` went on PyPI, because
+        constructing the config yourself is now the obvious way to embed the
+        notary in something else, and it was the one path with no guards on it.
+        """
+        self.check()
+
     @classmethod
     def from_env(cls, environ=None) -> "PaymentConfig":
         env = os.environ if environ is None else environ
@@ -285,7 +314,9 @@ class PaymentConfig:
                         else None),
             cdp_credentials=CdpCredentials.from_env(env),
         )
-        config.check()
+        # __post_init__ already ran check(); construction cannot produce an
+        # invalid config any more. Kept as documentation of the guarantee at
+        # the boundary where the values come from a human.
         return config
 
     def check(self) -> None:
@@ -333,11 +364,18 @@ class PaymentConfig:
             # cannot settle this network" — which sends the operator to look at
             # the wrong thing entirely. Costs one Ed25519 key load at startup.
             load_ed25519_key(self.cdp_credentials.secret)
-        if not self.facilitator_url.startswith("https://"):
-            # The facilitator is told what was paid and settles it. Over plain
-            # HTTP that is an interceptable claim about money.
+        # The facilitator is told what was paid and settles it. Over plain HTTP
+        # that is an interceptable claim about money — unless it is not on a
+        # network at all. A facilitator on loopback is the local-development
+        # and test case, and refusing it would make a config object that no
+        # test and no local x402 facilitator could construct, which is how a
+        # validation rule ends up being routed around instead of obeyed.
+        facilitator = urllib.parse.urlsplit(self.facilitator_url)
+        if facilitator.scheme != "https" and not (
+                facilitator.scheme == "http" and _is_loopback(facilitator.netloc)):
             raise PaymentConfigError(
-                f"facilitator URL must be https, got {self.facilitator_url!r}"
+                f"facilitator URL must be https, got {self.facilitator_url!r} "
+                f"(http is allowed only on loopback, for local development)"
             )
 
 

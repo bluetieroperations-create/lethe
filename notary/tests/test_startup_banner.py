@@ -6,15 +6,21 @@ Only one line in it has been checked against the world. These tests hold that
 line: every other claim must either be absent or marked unchecked.
 """
 
+import pytest
 from lethe_notary.cli import startup_banner
-from lethe_notary.payments import PaymentConfig
+from lethe_notary.payments import PaymentConfig, PaymentConfigError
 
 PAYEE = "0x000000000000000000000000000000000000dEaD"
 KEY_ID = "abcd1234"
 FACILITATOR = "https://facilitator.example/x402"
 
 
-def config_for(network, *, free=False, pay_to=PAYEE):
+def config_for(network, *, free=False, pay_to=None):
+    # A free config names no payee, because PaymentConfig refuses to hold both
+    # — the two are opposite instructions. `pay_to` defaults to the burn
+    # address only for the paid case.
+    if pay_to is None:
+        pay_to = None if free else PAYEE
     return PaymentConfig(pay_to=pay_to, price="$0.01", network=network,
                          facilitator_url=FACILITATOR, free_mode=free)
 
@@ -108,12 +114,17 @@ def test_free_mode_says_free_and_quotes_no_price():
     assert "MAINNET" not in out
 
 
-def test_free_mode_names_no_payee_even_if_one_is_configured():
-    """Direct construction can carry both (from_env refuses to). Printing the
-    address next to FREE would read as money moving to it."""
-    out = banner("eip155:8453", free=True, pay_to=PAYEE)
-    assert PAYEE not in out
-    assert "FREE" in out
+def test_a_free_config_cannot_even_hold_a_payee():
+    """This used to read "direct construction can carry both (from_env refuses
+    to)", and asserted the banner hid the payee it was carrying. It cannot
+    carry one any more: PaymentConfig validates on construction, so the
+    contradictory state the banner was defending against is unreachable rather
+    than merely unprinted."""
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:8453",
+                      facilitator_url=FACILITATOR, free_mode=True)
+    assert "LETHE_NOTARY_FREE" in str(e.value)
+    assert "LETHE_NOTARY_PAY_TO" in str(e.value)
 
 
 def test_every_variant_identifies_the_key_that_will_be_signing():

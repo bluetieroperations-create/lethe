@@ -384,11 +384,10 @@ def test_free_mode_and_a_cdp_credential_are_refused_together(secret):
     shape as FREE=1 beating PAY_TO: refuse rather than ignore something the
     operator provisioned on purpose."""
     from lethe_notary.payments import PaymentConfig, PaymentConfigError
-    config = PaymentConfig(pay_to=None, price="$0.01", network="eip155:84532",
-                           facilitator_url="https://h", free_mode=True,
-                           cdp_credentials=CdpCredentials(key_id=KEY_ID, secret=secret))
     with pytest.raises(PaymentConfigError) as e:
-        config.check()
+        PaymentConfig(pay_to=None, price="$0.01", network="eip155:84532",
+                      facilitator_url="https://h", free_mode=True,
+                      cdp_credentials=CdpCredentials(key_id=KEY_ID, secret=secret))
     assert "LETHE_NOTARY_CDP_KEY_ID" in str(e.value)
     assert secret not in str(e.value)
 
@@ -417,19 +416,27 @@ def test_a_mistyped_key_is_a_config_error_not_a_facilitator_error(bad, expected)
     assert bad not in str(e.value)
 
 
-def test_preflight_does_not_relabel_a_credential_failure(stub_facilitator):
-    """The same mislabelling, one layer down: preflight catches every
-    exception and blames the facilitator. A credential error has to survive
-    that unchanged, or the accurate message above gets overwritten."""
-    from lethe_notary.payments import PaymentConfig, PaymentGate
-    url, _ = stub_facilitator
-    config = PaymentConfig(
-        pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01",
-        network="eip155:8453", facilitator_url=url,
-        cdp_credentials=CdpCredentials(key_id=KEY_ID, secret="!!!not base64!!!"))
+def test_a_bad_credential_never_reaches_preflight_at_all(stub_facilitator):
+    """This test used to build a config holding an unusable secret and prove
+    that preflight reported it accurately instead of blaming the facilitator.
+    That config can no longer be built: the credential is parsed during
+    construction, so the error arrives earlier and closer to the mistake.
+
+    Preflight keeps its `except CdpAuthError: raise` clause as belt and braces,
+    but it is now unreachable through any supported path, which is a better
+    outcome than a well-worded message.
+    """
+    from lethe_notary.payments import PaymentConfig
+    url, seen = stub_facilitator
     with pytest.raises(CdpAuthError) as e:
-        PaymentGate(config).preflight()
+        PaymentConfig(
+            pay_to="0x000000000000000000000000000000000000dEaD", price="$0.01",
+            network="eip155:8453", facilitator_url=url,
+            cdp_credentials=CdpCredentials(key_id=KEY_ID, secret="!!!not base64!!!"))
     assert "cannot settle" not in str(e.value)
+    assert "not valid base64" in str(e.value)
+    # And the facilitator was never contacted, because nothing got that far.
+    assert seen == []
 
 
 def test_tokens_stay_valid_when_minted_from_many_threads(secret, signing_key):

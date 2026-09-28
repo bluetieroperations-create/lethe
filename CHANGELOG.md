@@ -109,6 +109,34 @@ that issued it.
 
 ### Fixed
 
+- **`PaymentConfig` validated environment variables and nothing else.** Every
+  guard in `check()` — a payee that cannot receive money, an alias network no
+  paying client will match, a plaintext facilitator, `FREE=1` beside a payee —
+  ran only from `from_env`. Construct the object directly and you got one that
+  looks valid, type-checks, and quotes prices to an address that does not
+  exist; the failure arrives when a customer has already signed.
+
+  That was survivable while this repo's own `serve` was the only caller. It
+  stopped being survivable the moment `lethe-notary` went on PyPI, because
+  building the config yourself is the obvious way to embed the notary in
+  something else, and it was the one path with no guards on it. `__post_init__`
+  now runs `check()`, so an invalid `PaymentConfig` cannot be constructed at
+  all.
+
+  One rule had to be relaxed to make that safe rather than merely strict: a
+  facilitator on **loopback** may be plaintext `http`. There is no network
+  there to intercept, it is the local-development and test case, and a rule
+  that forbids something people legitimately do is a rule that gets routed
+  around instead of obeyed. The carve-out is loopback, not "looks local" —
+  `localhost.evil.example` resolves to whatever its owner wants, and is
+  refused. `LETHE_NOTARY_PUBLIC_URL` already had this carve-out; the two now
+  share one definition instead of two that had already drifted.
+
+  Three tests had to be rewritten because the states they constructed are now
+  unreachable, which is the point: a free config carrying a payee, a free
+  config carrying a CDP credential, and a config holding an unusable CDP
+  secret. Each asserts the refusal now instead of the downstream behaviour.
+
 - **The startup banner read as a readiness signal and was not one.** It printed
   the price, the network and — via the config it echoed — an implication that
   the service was set up to be paid. Exactly one of its claims had been checked

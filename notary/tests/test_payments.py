@@ -482,3 +482,71 @@ def test_the_public_url_reaches_the_config_canonicalized():
         "LETHE_NOTARY_PUBLIC_URL": "https://notary.example.com/whatever?x=1",
     })
     assert config.public_url == "https://notary.example.com"
+
+
+# -- construction validates, not just from_env -----------------------------
+
+@pytest.mark.parametrize("kwargs,expected", [
+    ({"pay_to": "not-an-address", "network": "eip155:84532"}, "0x followed by 40 hex"),
+    ({"pay_to": PAYEE, "network": "base"}, "not a CAIP-2 network id"),
+    ({"pay_to": PAYEE, "network": "eip155:84532",
+      "facilitator_url": "http://facilitator.example"}, "must be https"),
+    ({"pay_to": None, "network": "eip155:84532"}, "LETHE_NOTARY_PAY_TO is not set"),
+])
+def test_a_direct_construction_is_validated_like_an_env_one(kwargs, expected):
+    """Every guard in `check()` used to apply to operators setting environment
+    variables and to nobody else, because only `from_env` called it. Anything
+    building a PaymentConfig directly got an object that looks valid,
+    type-checks, and quotes prices to an address that does not exist.
+
+    That was survivable while this repo's own `serve` was the only caller. It
+    stopped being survivable when lethe-notary went on PyPI, where constructing
+    the config yourself is the obvious way to embed the notary in something
+    else — and was the one path with no guards on it.
+    """
+    kwargs.setdefault("facilitator_url", "https://x402.org/facilitator")
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(price="$0.01", **kwargs)
+    assert expected in str(e.value)
+
+
+def test_a_valid_config_still_constructs():
+    """The guard must not be so eager that the ordinary case fails."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url="https://x402.org/facilitator")
+    assert config.pay_to == PAYEE
+
+
+def test_free_mode_still_constructs_without_a_payee():
+    assert PaymentConfig(pay_to=None, price="$0.01", network="eip155:84532",
+                         facilitator_url="https://x402.org/facilitator",
+                         free_mode=True).free_mode
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:8402", "http://127.0.0.1:8402", "http://[::1]:8402",
+    "http://LOCALHOST:8402",
+])
+def test_a_facilitator_on_loopback_may_be_plaintext(url):
+    """Validating on construction is only safe if the rules do not forbid
+    things people legitimately do. A facilitator on loopback is the local
+    development case — and the test case — and there is no network there for
+    anyone to intercept. Refusing it would make a config no local x402
+    facilitator could construct, which is how a validation rule ends up being
+    routed around instead of obeyed.
+    """
+    assert PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                         facilitator_url=url).facilitator_url == url
+
+
+@pytest.mark.parametrize("url", [
+    "http://facilitator.example", "http://192.168.1.10:8402",
+    "http://localhost.evil.example", "http://notlocalhost",
+])
+def test_a_plaintext_facilitator_anywhere_else_is_still_refused(url):
+    """The carve-out is loopback, not "looks local". `localhost.evil.example`
+    resolves to whatever its owner wants."""
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=url)
+    assert "must be https" in str(e.value)
