@@ -144,6 +144,22 @@ that issued it.
   `LETHE_NOTARY_PUBLIC_URL` already had this carve-out; the two now share one
   definition instead of two that had already drifted.
 
+  A facilitator credential no longer reaches the logs. A facilitator that
+  wants basic auth carries it in its URL, and that URL was printed verbatim by
+  the startup banner, by every error about it, and by `repr(PaymentConfig)` —
+  into journalctl, into whatever ships logs off the box, into a debugger, and
+  into the screenshot attached to "why won't my notary start". All seven print
+  sites redact the userinfo now; the stored value is untouched, because the
+  notary still has to authenticate with it.
+
+  Two smaller things fell out of parsing the facilitator URL rather than
+  string-matching its prefix. `http://[::1` used to escape as a raw
+  `ValueError` instead of the one error type this package documents, which an
+  embedder catching `PaymentConfigError` would not have caught; and `https://`
+  passed the scheme check while naming no host at all. Both are refused now.
+  `HTTPS://` is accepted, where `.startswith("https://")` refused it — the
+  same case-sensitivity bug already fixed once for `HTTP://LOCALHOST`.
+
   Three tests had to be rewritten because the states they constructed are now
   unreachable, which is the point: a free config carrying a payee, a free
   config carrying a CDP credential, and a config holding an unusable CDP

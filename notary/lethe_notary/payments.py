@@ -124,6 +124,35 @@ def check_network(network: str) -> None:
     )
 
 
+# Scheme, then the authority, then everything else. Deliberately a regex over
+# the raw string rather than urlsplit: this runs inside the error path for a
+# URL that urlsplit already refused to parse, and a redactor that raises while
+# building an error message is worse than no redactor.
+_URL_AUTHORITY = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/?#]*)(.*)$", re.S)
+
+
+def redact_userinfo(url: str) -> str:
+    """The URL with any credential removed, for showing to a human.
+
+    A facilitator that wants basic auth carries the credential in its URL, and
+    that URL is printed at boot and in every error about it — which is to say
+    into journalctl, into whatever ships logs off the box, and into the
+    screenshot someone attaches when asking why their notary will not start.
+    The value itself is untouched; only what gets displayed changes.
+    """
+    match = _URL_AUTHORITY.match(url)
+    if match is None:
+        # No scheme, so there is no authority to locate and no way to tell a
+        # credential from an "@" somewhere in a path. A typo'd separator —
+        # "https:/user:pass@host", one slash — lands here, and the error about
+        # it prints this string. Over-redacting a malformed URL costs the
+        # operator nothing; under-redacting it puts their credential in a log.
+        return f"***@{url.rpartition('@')[2]}" if "@" in url else url
+    scheme, authority, tail = match.groups()
+    _, at, host = authority.rpartition("@")
+    return f"{scheme}***@{host}{tail}" if at else url
+
+
 # Plaintext http is refused everywhere it names a remote host, and allowed on
 # the loopback interface, where there is no network for anyone to sit on. One
 # definition rather than two, because these rules were written apart and the
@@ -255,7 +284,7 @@ def check_pay_to(pay_to: str, network: str) -> None:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class PaymentConfig:
     """Where the money goes, and how much.
 
@@ -279,6 +308,24 @@ class PaymentConfig:
     # the difference between testnet-only and mainnet. Never printed: see
     # CdpCredentials.__repr__.
     cdp_credentials: "CdpCredentials | None" = None
+
+    def __repr__(self) -> str:
+        """Redact the facilitator credential, the way CdpCredentials does.
+
+        `repr=False` above because a dataclass prints every field, and this one
+        can hold two secrets: the CDP key (already redacted by
+        `CdpCredentials.__repr__`) and a facilitator URL carrying basic-auth
+        userinfo. That reasoning was written for the inner object and then not
+        applied to the outer one, which is the object that actually reaches a
+        debugger, a log line or a failing test's output.
+        """
+        return (
+            f"PaymentConfig(pay_to={self.pay_to!r}, price={self.price!r}, "
+            f"network={self.network!r}, "
+            f"facilitator_url={redact_userinfo(self.facilitator_url)!r}, "
+            f"free_mode={self.free_mode!r}, public_url={self.public_url!r}, "
+            f"cdp_credentials={self.cdp_credentials!r})"
+        )
 
     def __post_init__(self) -> None:
         """Validate on construction, not only via `from_env`.
@@ -393,12 +440,29 @@ class PaymentConfig:
         # and test case, and refusing it would make a config object that no
         # test and no local x402 facilitator could construct, which is how a
         # validation rule ends up being routed around instead of obeyed.
-        facilitator = urllib.parse.urlsplit(self.facilitator_url)
+        try:
+            facilitator = urllib.parse.urlsplit(self.facilitator_url)
+        except ValueError as exc:
+            # urlsplit raises on a malformed IPv6 authority like "http://[::1".
+            # Everything this constructor rejects must arrive as the one error
+            # type the package documents, or an embedder catching
+            # PaymentConfigError gets an unhandled ValueError instead.
+            raise PaymentConfigError(
+                f"facilitator URL {redact_userinfo(self.facilitator_url)!r} is not a URL ({exc})"
+            ) from None
         if facilitator.scheme != "https" and not (
                 facilitator.scheme == "http" and _is_loopback(facilitator.netloc)):
             raise PaymentConfigError(
-                f"facilitator URL must be https, got {self.facilitator_url!r} "
+                f"facilitator URL must be https, got {redact_userinfo(self.facilitator_url)!r} "
                 f"(http is allowed only on loopback, for local development)"
+            )
+        if not facilitator.netloc.rpartition("@")[2]:
+            # "https://" parses and passes the scheme check while naming no
+            # host at all. Cheap to catch now that the URL is parsed anyway,
+            # and the alternative is a notary that starts and then cannot
+            # reach a facilitator that does not exist.
+            raise PaymentConfigError(
+                f"facilitator URL {redact_userinfo(self.facilitator_url)!r} names no host"
             )
 
 
@@ -568,10 +632,11 @@ class PaymentGate:
             # message about the credential; let it through unchanged.
             raise
         except Exception as exc:
+            shown = redact_userinfo(self.config.facilitator_url)
             raise PaymentConfigError(
-                f"facilitator {self.config.facilitator_url} cannot settle scheme "
+                f"facilitator {shown} cannot settle scheme "
                 f"'exact' on network {self.config.network!r} ({exc}). "
-                f"Check {self.config.facilitator_url.rstrip('/')}/supported for the "
+                f"Check {shown.rstrip('/')}/supported for the "
                 f"kinds it does settle, or point LETHE_NOTARY_FACILITATOR at one "
                 f"that covers your network."
             ) from None

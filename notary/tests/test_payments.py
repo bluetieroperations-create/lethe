@@ -604,3 +604,158 @@ def test_a_published_origin_is_canonicalized_on_direct_construction_too():
                            facilitator_url="https://f",
                            public_url="https://notary.example.com/ignored?q=1#f")
     assert config.public_url == "https://notary.example.com"
+
+
+@pytest.mark.parametrize("url,reason", [
+    # urlsplit raises ValueError on a malformed IPv6 authority. Everything this
+    # constructor rejects has to arrive as the one error type the package
+    # documents, or an embedder catching PaymentConfigError gets an unhandled
+    # ValueError instead — and embedders are exactly who this validation is for.
+    ("http://[::1", "is not a URL"),
+    # "https://" passes a scheme check while naming no host at all.
+    ("https://", "names no host"),
+    ("http://", "must be https"),
+])
+def test_a_malformed_facilitator_url_is_a_config_error_not_a_stray_exception(url, reason):
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=url)
+    assert reason in str(e.value)
+
+
+def test_an_uppercase_scheme_is_accepted():
+    """`.startswith("https://")` refused `HTTPS://`; parsing does not. The same
+    case-sensitivity bug this repo already fixed once for `HTTP://LOCALHOST`."""
+    assert PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                         facilitator_url="HTTPS://X402.ORG/facilitator")
+
+
+# -- a facilitator credential is not for the logs ---------------------------
+
+@pytest.mark.parametrize("url,shown", [
+    ("https://apikey:s3cr3t@f.example/x402", "https://***@f.example/x402"),
+    ("https://user@h", "https://***@h"),
+    ("https://u:p@h:8443/x?q=1#z", "https://***@h:8443/x?q=1#z"),
+    ("http://u:p@[::1]:8402/x", "http://***@[::1]:8402/x"),
+    # No userinfo, nothing to do.
+    ("https://f.example/x402", "https://f.example/x402"),
+    # An "@" in the PATH is not a credential.
+    ("https://h/path@notuserinfo", "https://h/path@notuserinfo"),
+    # The LAST "@" delimits the authority, not the first. A password with a
+    # literal "@" in it is ordinary, and splitting on the first one leaves the
+    # rest of the credential in the output. Added because a mutation that
+    # swapped rpartition for partition survived the rest of this table.
+    ("https://user@name:pass@h.example/x", "https://***@h.example/x"),
+    # Must never raise: it runs inside the error path for a URL that urlsplit
+    # already refused, so a redactor that throws is worse than none.
+    ("http://[::1", "http://[::1"),
+    ("not a url at all", "not a url at all"),
+    ("", ""),
+    # A typo'd scheme separator — one slash — has no authority to locate, and
+    # the error about it prints this string. Over-redacting a malformed URL
+    # costs the operator nothing; under-redacting puts their credential in a
+    # log. Found auditing: this leaked before the schemeless branch existed.
+    ("https:/apikey:s3cr3t@f.example", "***@f.example"),
+    ("u:p@h/x", "***@h/x"),
+])
+def test_redaction_removes_the_credential_and_nothing_else(url, shown):
+    from lethe_notary.payments import redact_userinfo
+    assert redact_userinfo(url) == shown
+
+
+SECRET = "s3cr3tApiKeyValue"
+
+
+def test_the_banner_does_not_print_a_facilitator_credential():
+    """A facilitator wanting basic auth carries the credential in its URL, and
+    the banner goes to stderr — journalctl, a log shipper, and the screenshot
+    attached to "why won't my notary start"."""
+    from lethe_notary.cli import startup_banner
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url=f"https://apikey:{SECRET}@f.example/x402")
+    out = "\n".join(startup_banner(config, "k"))
+    assert SECRET not in out
+    assert "https://***@f.example/x402" in out
+
+
+def test_a_config_error_about_the_facilitator_does_not_echo_its_credential():
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=f"ftp://apikey:{SECRET}@f.example")
+    assert SECRET not in str(e.value)
+
+
+def test_redaction_is_display_only_and_does_not_disarm_the_credential():
+    """The notary still has to authenticate. Redacting the stored value would
+    turn a logging fix into an outage."""
+    url = f"https://apikey:{SECRET}@f.example/x402"
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url=url)
+    assert config.facilitator_url == url
+
+
+def test_the_preflight_error_does_not_echo_the_facilitator_credential():
+    """The other place the URL is printed, and the likelier one: preflight
+    fails at boot and the operator pastes the whole message into an issue.
+    Added because a mutation that un-redacted this site survived."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Empty(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = _json.dumps({"kinds": []}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Empty)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config = PaymentConfig(
+            pay_to=PAYEE, price="$0.01", network="eip155:84532",
+            facilitator_url=f"http://apikey:{SECRET}@127.0.0.1:{server.server_port}")
+        with pytest.raises(PaymentConfigError) as e:
+            PaymentGate(config).preflight()
+    finally:
+        server.shutdown()
+    assert SECRET not in str(e.value)
+    assert "***@127.0.0.1" in str(e.value)
+
+
+def test_the_config_repr_does_not_print_the_facilitator_credential():
+    """`CdpCredentials` got a custom __repr__ because "a dataclass prints its
+    fields, and this one sits inside PaymentConfig". That reasoning was then
+    not applied to PaymentConfig itself, which is the object that actually
+    reaches a debugger, a log line, or a failing test's output — and which
+    holds a second credential in its facilitator URL."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url=f"https://apikey:{SECRET}@f.example/x")
+    assert SECRET not in repr(config)
+    assert "https://***@f.example/x" in repr(config)
+
+
+def test_the_hand_written_repr_lists_every_field():
+    """The hazard of writing __repr__ by hand: add a field and it silently
+    vanishes from every debug line. Reads the dataclass rather than a copy of
+    the field list, so the two cannot drift."""
+    import dataclasses
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url="https://f.example")
+    missing = [f.name for f in dataclasses.fields(config)
+               if f"{f.name}=" not in repr(config)]
+    assert not missing, f"__repr__ omits {missing}"
+
+
+def test_a_typod_scheme_separator_does_not_leak_the_credential():
+    """The whole exposure in one line: a URL malformed enough to be rejected
+    is still a URL the operator typed a real credential into, and the refusal
+    is printed at boot."""
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=f"https:/apikey:{SECRET}@f.example")
+    assert SECRET not in str(e.value)
