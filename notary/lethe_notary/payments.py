@@ -142,7 +142,12 @@ def redact_userinfo(url: str) -> str:
     """
     match = _URL_AUTHORITY.match(url)
     if match is None:
-        return url
+        # No scheme, so there is no authority to locate and no way to tell a
+        # credential from an "@" somewhere in a path. A typo'd separator —
+        # "https:/user:pass@host", one slash — lands here, and the error about
+        # it prints this string. Over-redacting a malformed URL costs the
+        # operator nothing; under-redacting it puts their credential in a log.
+        return f"***@{url.rpartition('@')[2]}" if "@" in url else url
     scheme, authority, tail = match.groups()
     _, at, host = authority.rpartition("@")
     return f"{scheme}***@{host}{tail}" if at else url
@@ -279,7 +284,7 @@ def check_pay_to(pay_to: str, network: str) -> None:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class PaymentConfig:
     """Where the money goes, and how much.
 
@@ -303,6 +308,24 @@ class PaymentConfig:
     # the difference between testnet-only and mainnet. Never printed: see
     # CdpCredentials.__repr__.
     cdp_credentials: "CdpCredentials | None" = None
+
+    def __repr__(self) -> str:
+        """Redact the facilitator credential, the way CdpCredentials does.
+
+        `repr=False` above because a dataclass prints every field, and this one
+        can hold two secrets: the CDP key (already redacted by
+        `CdpCredentials.__repr__`) and a facilitator URL carrying basic-auth
+        userinfo. That reasoning was written for the inner object and then not
+        applied to the outer one, which is the object that actually reaches a
+        debugger, a log line or a failing test's output.
+        """
+        return (
+            f"PaymentConfig(pay_to={self.pay_to!r}, price={self.price!r}, "
+            f"network={self.network!r}, "
+            f"facilitator_url={redact_userinfo(self.facilitator_url)!r}, "
+            f"free_mode={self.free_mode!r}, public_url={self.public_url!r}, "
+            f"cdp_credentials={self.cdp_credentials!r})"
+        )
 
     def __post_init__(self) -> None:
         """Validate on construction, not only via `from_env`.

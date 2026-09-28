@@ -651,6 +651,12 @@ def test_an_uppercase_scheme_is_accepted():
     ("http://[::1", "http://[::1"),
     ("not a url at all", "not a url at all"),
     ("", ""),
+    # A typo'd scheme separator — one slash — has no authority to locate, and
+    # the error about it prints this string. Over-redacting a malformed URL
+    # costs the operator nothing; under-redacting puts their credential in a
+    # log. Found auditing: this leaked before the schemeless branch existed.
+    ("https:/apikey:s3cr3t@f.example", "***@f.example"),
+    ("u:p@h/x", "***@h/x"),
 ])
 def test_redaction_removes_the_credential_and_nothing_else(url, shown):
     from lethe_notary.payments import redact_userinfo
@@ -719,3 +725,37 @@ def test_the_preflight_error_does_not_echo_the_facilitator_credential():
         server.shutdown()
     assert SECRET not in str(e.value)
     assert "***@127.0.0.1" in str(e.value)
+
+
+def test_the_config_repr_does_not_print_the_facilitator_credential():
+    """`CdpCredentials` got a custom __repr__ because "a dataclass prints its
+    fields, and this one sits inside PaymentConfig". That reasoning was then
+    not applied to PaymentConfig itself, which is the object that actually
+    reaches a debugger, a log line, or a failing test's output — and which
+    holds a second credential in its facilitator URL."""
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url=f"https://apikey:{SECRET}@f.example/x")
+    assert SECRET not in repr(config)
+    assert "https://***@f.example/x" in repr(config)
+
+
+def test_the_hand_written_repr_lists_every_field():
+    """The hazard of writing __repr__ by hand: add a field and it silently
+    vanishes from every debug line. Reads the dataclass rather than a copy of
+    the field list, so the two cannot drift."""
+    import dataclasses
+    config = PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                           facilitator_url="https://f.example")
+    missing = [f.name for f in dataclasses.fields(config)
+               if f"{f.name}=" not in repr(config)]
+    assert not missing, f"__repr__ omits {missing}"
+
+
+def test_a_typod_scheme_separator_does_not_leak_the_credential():
+    """The whole exposure in one line: a URL malformed enough to be rejected
+    is still a URL the operator typed a real credential into, and the refusal
+    is printed at boot."""
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=f"https:/apikey:{SECRET}@f.example")
+    assert SECRET not in str(e.value)

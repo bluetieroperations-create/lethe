@@ -146,11 +146,11 @@ that issued it.
 
   A facilitator credential no longer reaches the logs. A facilitator that
   wants basic auth carries it in its URL, and that URL was printed verbatim by
-  the startup banner and by every error about it — into journalctl, into
-  whatever ships logs off the box, and into the screenshot attached to "why
-  won't my notary start". All six print sites redact the userinfo now; the
-  stored value is untouched, because the notary still has to authenticate with
-  it.
+  the startup banner, by every error about it, and by `repr(PaymentConfig)` —
+  into journalctl, into whatever ships logs off the box, into a debugger, and
+  into the screenshot attached to "why won't my notary start". All seven print
+  sites redact the userinfo now; the stored value is untouched, because the
+  notary still has to authenticate with it.
 
   Two smaller things fell out of parsing the facilitator URL rather than
   string-matching its prefix. `http://[::1` used to escape as a raw
