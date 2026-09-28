@@ -7,7 +7,12 @@ import click
 
 from lethe.signing import Signer, key_id_for
 
-from .payments import PaymentConfig, PaymentConfigError, network_kind
+from .payments import (
+    PaymentConfig,
+    PaymentConfigError,
+    network_kind,
+    redact_userinfo,
+)
 from .store import WitnessLog
 
 
@@ -87,7 +92,7 @@ def startup_banner(config: PaymentConfig, key_id: str) -> list[str]:
     lines = [
         f"lethe-notary  key_id={key_id}  "
         f"{config.price} on {config.network}{label}",
-        f"              checked:     {config.facilitator_url} reports it "
+        f"              checked:     {redact_userinfo(config.facilitator_url)} reports it "
         f"settles 'exact' on {config.network}",
     ]
     if config.cdp_credentials is not None:

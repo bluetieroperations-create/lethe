@@ -124,6 +124,30 @@ def check_network(network: str) -> None:
     )
 
 
+# Scheme, then the authority, then everything else. Deliberately a regex over
+# the raw string rather than urlsplit: this runs inside the error path for a
+# URL that urlsplit already refused to parse, and a redactor that raises while
+# building an error message is worse than no redactor.
+_URL_AUTHORITY = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/?#]*)(.*)$", re.S)
+
+
+def redact_userinfo(url: str) -> str:
+    """The URL with any credential removed, for showing to a human.
+
+    A facilitator that wants basic auth carries the credential in its URL, and
+    that URL is printed at boot and in every error about it — which is to say
+    into journalctl, into whatever ships logs off the box, and into the
+    screenshot someone attaches when asking why their notary will not start.
+    The value itself is untouched; only what gets displayed changes.
+    """
+    match = _URL_AUTHORITY.match(url)
+    if match is None:
+        return url
+    scheme, authority, tail = match.groups()
+    _, at, host = authority.rpartition("@")
+    return f"{scheme}***@{host}{tail}" if at else url
+
+
 # Plaintext http is refused everywhere it names a remote host, and allowed on
 # the loopback interface, where there is no network for anyone to sit on. One
 # definition rather than two, because these rules were written apart and the
@@ -401,12 +425,12 @@ class PaymentConfig:
             # type the package documents, or an embedder catching
             # PaymentConfigError gets an unhandled ValueError instead.
             raise PaymentConfigError(
-                f"facilitator URL {self.facilitator_url!r} is not a URL ({exc})"
+                f"facilitator URL {redact_userinfo(self.facilitator_url)!r} is not a URL ({exc})"
             ) from None
         if facilitator.scheme != "https" and not (
                 facilitator.scheme == "http" and _is_loopback(facilitator.netloc)):
             raise PaymentConfigError(
-                f"facilitator URL must be https, got {self.facilitator_url!r} "
+                f"facilitator URL must be https, got {redact_userinfo(self.facilitator_url)!r} "
                 f"(http is allowed only on loopback, for local development)"
             )
         if not facilitator.netloc.rpartition("@")[2]:
@@ -415,7 +439,7 @@ class PaymentConfig:
             # and the alternative is a notary that starts and then cannot
             # reach a facilitator that does not exist.
             raise PaymentConfigError(
-                f"facilitator URL {self.facilitator_url!r} names no host"
+                f"facilitator URL {redact_userinfo(self.facilitator_url)!r} names no host"
             )
 
 
@@ -585,10 +609,11 @@ class PaymentGate:
             # message about the credential; let it through unchanged.
             raise
         except Exception as exc:
+            shown = redact_userinfo(self.config.facilitator_url)
             raise PaymentConfigError(
-                f"facilitator {self.config.facilitator_url} cannot settle scheme "
+                f"facilitator {shown} cannot settle scheme "
                 f"'exact' on network {self.config.network!r} ({exc}). "
-                f"Check {self.config.facilitator_url.rstrip('/')}/supported for the "
+                f"Check {shown.rstrip('/')}/supported for the "
                 f"kinds it does settle, or point LETHE_NOTARY_FACILITATOR at one "
                 f"that covers your network."
             ) from None

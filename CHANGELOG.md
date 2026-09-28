@@ -144,6 +144,14 @@ that issued it.
   `LETHE_NOTARY_PUBLIC_URL` already had this carve-out; the two now share one
   definition instead of two that had already drifted.
 
+  A facilitator credential no longer reaches the logs. A facilitator that
+  wants basic auth carries it in its URL, and that URL was printed verbatim by
+  the startup banner and by every error about it — into journalctl, into
+  whatever ships logs off the box, and into the screenshot attached to "why
+  won't my notary start". All six print sites redact the userinfo now; the
+  stored value is untouched, because the notary still has to authenticate with
+  it.
+
   Two smaller things fell out of parsing the facilitator URL rather than
   string-matching its prefix. `http://[::1` used to escape as a raw
   `ValueError` instead of the one error type this package documents, which an
