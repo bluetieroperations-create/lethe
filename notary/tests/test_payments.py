@@ -3,7 +3,6 @@
 import json
 
 import pytest
-from conftest import make_cert
 from lethe_notary.payments import (
     PaymentConfig,
     PaymentConfigError,
@@ -12,6 +11,7 @@ from lethe_notary.payments import (
     network_kind,
 )
 from lethe_notary.service import create_app
+from notary_certs import make_cert
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 

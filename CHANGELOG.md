@@ -109,6 +109,16 @@ that issued it.
 
 ### Fixed
 
+- **`pytest notary/tests tests` failed to collect.** Both directories go on
+  `sys.path` and both had a module named `conftest`, so
+  `from conftest import make_cert` in the notary tests resolved to the root
+  one, which has no such name — five files failed to import. CI never saw it,
+  because it runs the two suites as separate steps for unrelated reasons
+  (different dependencies); the person who hit it was whoever ran a bare
+  `pytest` over both directories, which is the obvious first thing to try. The
+  helper moved to a uniquely-named module, which cannot collide, and CI now
+  collects both suites in one invocation so this cannot come back quietly.
+
 - **`PaymentConfig` validated environment variables and nothing else.** Every
   guard in `check()` — a payee that cannot receive money, an alias network no
   paying client will match, a plaintext facilitator, `FREE=1` beside a payee —

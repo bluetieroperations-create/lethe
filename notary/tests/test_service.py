@@ -3,9 +3,9 @@
 import json
 
 import pytest
-from conftest import make_cert
 from lethe_notary.receipt import verify_receipt
 from lethe_notary.service import challenge_message, create_app
+from notary_certs import make_cert
 from starlette.testclient import TestClient
 
 from lethe.signing import Signer, key_id_for

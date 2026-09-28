@@ -20,9 +20,9 @@ through the server's own charge path.
 import json
 
 import pytest
-from conftest import make_cert
 from lethe_notary.payments import PaymentConfig
 from lethe_notary.service import create_app
+from notary_certs import make_cert
 from starlette.testclient import TestClient
 
 pytest.importorskip("eth_account", reason="needs x402[evm]")

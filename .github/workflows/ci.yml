@@ -285,6 +285,31 @@ jobs:
           LETHE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lethe_test
         run: python -m pytest notary/tests -q -ra --junitxml=notary-junit.xml
 
+      # The two suites run as separate steps above because they have different
+      # dependencies. That is also why nothing here ever collected them
+      # together — and collecting them together used to fail outright, because
+      # both directories go on sys.path and both had a module named
+      # `conftest`, so `from conftest import make_cert` in the notary tests
+      # resolved to the root one. Five files failed to import. CI was green
+      # throughout; the person who hit it was whoever ran a bare `pytest` over
+      # both directories, which is the obvious thing to try.
+      #
+      # Cheap to keep honest: collect both in one invocation and assert it
+      # still works. --collect-only because the point is import resolution,
+      # not re-running 339 tests a third time.
+      - name: Both suites must collect together
+        # Quiet on success (collect-only lists every test id, which is 450+
+        # lines of nothing), but the failure output IS the diagnostic — it
+        # names the module that collided and the import that could not
+        # resolve. Redirecting it to /dev/null unconditionally, which is what
+        # this step did first, leaves a red X and no reason for it.
+        run: |
+          if ! out=$(python -m pytest notary/tests tests --collect-only -q 2>&1); then
+            echo "$out"
+            exit 1
+          fi
+          echo "$out" | tail -1
+
       # A green check that silently skipped the DB half of the suite would
       # overstate what CI proved. Every test must actually run.
       - name: No tests were skipped

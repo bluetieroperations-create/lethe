@@ -9,8 +9,8 @@ import json
 import time
 
 import pytest
-from conftest import make_cert
 from lethe_notary.service import challenge_message, create_app
+from notary_certs import make_cert
 from starlette.testclient import TestClient
 
 from lethe.cert_schema import verify_certificate_json
