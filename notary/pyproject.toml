@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lethe-notary"
-version = "0.2.0"
+version = "0.2.1"
 description = "A paid countersigning witness for Lethe deletion certificates, billed over x402."
 # Without this the PyPI page is blank — no description at all — and a
 # published version's metadata can never be amended, only superseded.
