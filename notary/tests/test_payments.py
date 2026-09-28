@@ -604,3 +604,27 @@ def test_a_published_origin_is_canonicalized_on_direct_construction_too():
                            facilitator_url="https://f",
                            public_url="https://notary.example.com/ignored?q=1#f")
     assert config.public_url == "https://notary.example.com"
+
+
+@pytest.mark.parametrize("url,reason", [
+    # urlsplit raises ValueError on a malformed IPv6 authority. Everything this
+    # constructor rejects has to arrive as the one error type the package
+    # documents, or an embedder catching PaymentConfigError gets an unhandled
+    # ValueError instead — and embedders are exactly who this validation is for.
+    ("http://[::1", "is not a URL"),
+    # "https://" passes a scheme check while naming no host at all.
+    ("https://", "names no host"),
+    ("http://", "must be https"),
+])
+def test_a_malformed_facilitator_url_is_a_config_error_not_a_stray_exception(url, reason):
+    with pytest.raises(PaymentConfigError) as e:
+        PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                      facilitator_url=url)
+    assert reason in str(e.value)
+
+
+def test_an_uppercase_scheme_is_accepted():
+    """`.startswith("https://")` refused `HTTPS://`; parsing does not. The same
+    case-sensitivity bug this repo already fixed once for `HTTP://LOCALHOST`."""
+    assert PaymentConfig(pay_to=PAYEE, price="$0.01", network="eip155:84532",
+                         facilitator_url="HTTPS://X402.ORG/facilitator")

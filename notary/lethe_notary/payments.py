@@ -393,12 +393,29 @@ class PaymentConfig:
         # and test case, and refusing it would make a config object that no
         # test and no local x402 facilitator could construct, which is how a
         # validation rule ends up being routed around instead of obeyed.
-        facilitator = urllib.parse.urlsplit(self.facilitator_url)
+        try:
+            facilitator = urllib.parse.urlsplit(self.facilitator_url)
+        except ValueError as exc:
+            # urlsplit raises on a malformed IPv6 authority like "http://[::1".
+            # Everything this constructor rejects must arrive as the one error
+            # type the package documents, or an embedder catching
+            # PaymentConfigError gets an unhandled ValueError instead.
+            raise PaymentConfigError(
+                f"facilitator URL {self.facilitator_url!r} is not a URL ({exc})"
+            ) from None
         if facilitator.scheme != "https" and not (
                 facilitator.scheme == "http" and _is_loopback(facilitator.netloc)):
             raise PaymentConfigError(
                 f"facilitator URL must be https, got {self.facilitator_url!r} "
                 f"(http is allowed only on loopback, for local development)"
+            )
+        if not facilitator.netloc.rpartition("@")[2]:
+            # "https://" parses and passes the scheme check while naming no
+            # host at all. Cheap to catch now that the URL is parsed anyway,
+            # and the alternative is a notary that starts and then cannot
+            # reach a facilitator that does not exist.
+            raise PaymentConfigError(
+                f"facilitator URL {self.facilitator_url!r} names no host"
             )
 
 
