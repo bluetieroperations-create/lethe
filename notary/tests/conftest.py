@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lethe_notary.payments import PaymentConfig  # noqa: E402
 from lethe_notary.store import WitnessLog  # noqa: E402
-from notary_certs import make_cert  # noqa: E402,F401  (re-exported for fixtures)
 
 from lethe.signing import Signer  # noqa: E402
 

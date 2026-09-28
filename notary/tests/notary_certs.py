@@ -20,9 +20,8 @@ in conftest.py where pytest looks for them; only this plain helper moved.
 
 from lethe.certificate import build_certificate, certificate_to_dict
 from lethe.models import LayerResult
-from lethe.signing import Signer
 
-__all__ = ["make_cert", "Signer"]
+__all__ = ["make_cert"]
 
 
 def make_cert(signer, *, subject="s", audit_head="a" * 64, request_id="r"):

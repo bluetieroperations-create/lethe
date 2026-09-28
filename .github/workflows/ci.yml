@@ -298,7 +298,17 @@ jobs:
       # still works. --collect-only because the point is import resolution,
       # not re-running 339 tests a third time.
       - name: Both suites must collect together
-        run: python -m pytest notary/tests tests --collect-only -q > /dev/null
+        # Quiet on success (collect-only lists every test id, which is 450+
+        # lines of nothing), but the failure output IS the diagnostic — it
+        # names the module that collided and the import that could not
+        # resolve. Redirecting it to /dev/null unconditionally, which is what
+        # this step did first, leaves a red X and no reason for it.
+        run: |
+          if ! out=$(python -m pytest notary/tests tests --collect-only -q 2>&1); then
+            echo "$out"
+            exit 1
+          fi
+          echo "$out" | tail -1
 
       # A green check that silently skipped the DB half of the suite would
       # overstate what CI proved. Every test must actually run.
