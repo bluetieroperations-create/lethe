@@ -13,6 +13,29 @@ that issued it.
 
 ### Added
 
+- **`docs/reviewing.md`**, written from the defects a single hard run actually
+  produced rather than from general principle. The finding worth the document:
+  almost none of them were in the payment logic — they were in the machinery
+  meant to catch problems. A stub facilitator that stripped the port and hid a
+  real bug for a commit; a CI guard that sent its own diagnostic to
+  `/dev/null`; a `noqa` on the dead import it described; a comment claiming to
+  match an SDK, written from memory, wrong twice; validation attached to
+  `from_env` and therefore to nobody who constructs the object directly.
+
+  It also records a stopping rule, because three audit passes over one change
+  each found something. The signal is not that a pass found something, it is
+  *what class* it found: pass three repeating pass two's class meant pass two's
+  enumeration was incomplete, not that a fourth pass was owed. Repeat class →
+  make the class exhaustive, do not look harder.
+
+  `tests/test_review_invariants.py` enforces the parts that can be: an
+  inventory of every signal suppressor in the tree — `noqa`, `importorskip`,
+  skip marks — each with the reason it was allowed, failing on a new one, on a
+  growing count, and on a stale entry; plus a check that no CI step sends a
+  guard's output to `/dev/null` unless it is a `--help` smoke test where the
+  exit code is the whole signal. Mutation-tested against six ways to slip one
+  past, including the inventory itself going vacuous.
+
 - **`lethe-notary` is publishable.** It has lived in this repo since it was
   written and has never been on PyPI, so every fix in the entries below —
   mainnet auth, the catalog identity, the honest banner, the contradictory-config
