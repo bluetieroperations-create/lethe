@@ -45,11 +45,12 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
   version has no section in `notary/CHANGELOG.md` does not publish; and because
   that check only fires once the tag is pushed, `notary/tests/test_packaging.py`
   makes the same assertion on every commit, along with one that the notary's
-  changelog is not a copy of this one. Six ways for the split to come apart
+  changelog is not a copy of this one. Eight ways for the split to come apart
   quietly were tried against those tests — a missing section, a version bumped
   without one, a heading with nothing under it, a section whose number is only
-  a prefix of the version, this file copied over that one, the PyPI link
-  dropped — and each fails the test meant to catch it.
+  a prefix of the version, this file copied over that one, and three ways to
+  cut the notary's changelog off from its readers — and each fails the test
+  meant to catch it.
 
 - **`docs/reviewing.md`**, written from the defects a single hard run actually
   produced rather than from general principle. The finding worth the document:

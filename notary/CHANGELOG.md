@@ -32,6 +32,18 @@ schema versions (`lethe.cert/N`) are `lethe-delete`'s and are recorded there.
   at the time a version bump is still free to fix, rather than after the tag is
   pushed.
 
+  Reaching it from PyPI needed two links rather than one, which only came out
+  by reading the published metadata instead of assuming it. The obvious fix — a
+  `Changelog` project URL — is set now, but **a PyPI page's metadata is frozen
+  at upload**: 0.2.0 and 0.2.1 are already out without it and can never gain
+  it. So the line that actually covers them is the one added to the top of
+  `README.md`, which their frozen `Documentation` URL points at on `main` and
+  therefore resolves live. It is an absolute URL, because that README *is* the
+  long description and PyPI does not rewrite relative links — `](CHANGELOG.md)`
+  renders broken on the one page it exists for. Both links are asserted; the
+  README one is the load-bearing half today, and deleting it is the only
+  failure here that publishing again cannot repair.
+
 ## [0.2.1] — 2026-09-27
 
 ### Fixed

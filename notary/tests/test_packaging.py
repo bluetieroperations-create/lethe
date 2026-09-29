@@ -101,9 +101,37 @@ def test_the_changelog_is_the_notarys_own_and_not_the_repos():
     assert first != (REPO / "CHANGELOG.md").read_text().splitlines()[0]
 
 
+CHANGELOG_URL = ("https://github.com/bluetieroperations-create/lethe"
+                 "/blob/main/notary/CHANGELOG.md")
+
+
 def test_the_changelog_is_reachable_from_the_pypi_page(project):
-    """Without a GitHub Release there is no other link to it."""
-    assert "Changelog" in project.get("urls", {}), project.get("urls")
+    """There is no GitHub Release, so the page is the only way in — and it
+    takes two links, because one of them cannot work retroactively.
+
+    A PyPI page's metadata is frozen at upload. 0.2.0 and 0.2.1 are published
+    with no `Changelog` URL and can never gain one, so that link only starts
+    covering releases from the next one on.
+    """
+    assert project.get("urls", {}).get("Changelog") == CHANGELOG_URL, \
+        project.get("urls")
+
+
+def test_the_already_published_versions_can_still_reach_the_changelog():
+    """What covers 0.2.0 and 0.2.1: their frozen `Documentation` URL points at
+    this README on `main`, which resolves live. Deleting the line from the
+    README takes the changelog away from every version already on PyPI — the
+    one failure here that cannot be fixed by publishing again.
+
+    The URL must be absolute. This README is the long description, and PyPI
+    does not rewrite relative links: `](CHANGELOG.md)` renders broken on
+    exactly the page this line exists for.
+    """
+    readme = (NOTARY / "README.md").read_text()
+    assert CHANGELOG_URL in readme, (
+        "notary/README.md must link the changelog by absolute URL; it is the "
+        "only route to it from the versions already published on PyPI"
+    )
 
 
 def test_the_version_is_a_plain_release_number(project):

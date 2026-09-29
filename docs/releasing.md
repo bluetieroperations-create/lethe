@@ -127,10 +127,20 @@ it fires after the tag is already pushed — which is the wrong moment to find
 out.
 
 **PyPI only — no GitHub Release.** This repo's Releases page is
-`lethe-delete`'s `v*` line; two series interleaved on it read as one product's
-history with holes in it. `notary/CHANGELOG.md` is this package's record
-instead, linked from its PyPI page as the `Changelog` project URL — which is
-why the tag does not publish without a section in it.
+`lethe-delete`'s `v*` line — all seven releases on it are `v*` — and two series
+interleaved there read as one product's history with holes in it.
+`notary/CHANGELOG.md` is this package's record instead, which is why the tag
+does not publish without a section in it.
+
+Reaching that record from PyPI takes two links, because one of them cannot
+work retroactively. The `Changelog` project URL is set in
+`notary/pyproject.toml`, but **a PyPI page's metadata is frozen at upload**:
+0.2.0 and 0.2.1 are published without it and can never gain it, so that link
+starts at the next release. What covers the versions already out there is the
+line at the top of `notary/README.md`, because their `Documentation` URL
+points at that README on `main` and resolves live. Both are asserted by
+`notary/tests/test_packaging.py`; the README one is the load-bearing half
+today.
 
 ### First publish: a *pending* publisher
 
