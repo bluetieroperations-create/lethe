@@ -242,7 +242,10 @@ operator's published public key to pin against). Full guide:
 
 Pushing a `vX.Y.Z` tag publishes both the GitHub Release and the PyPI package
 from that one tag, with the notes taken from the CHANGELOG so the two cannot
-tell different stories. See [docs/releasing.md](docs/releasing.md).
+tell different stories. `lethe-notary` is a second distribution in this repo on
+its own version line: `notary-v*` tags publish it, and its changes are recorded
+in [notary/CHANGELOG.md](notary/CHANGELOG.md). See
+[docs/releasing.md](docs/releasing.md).
 
 ## License
 

@@ -6,8 +6,10 @@ tag disagrees with what the repo says it is.
 
 ## Cutting one
 
-1. Bump `lethe/version.py` (and `notary/pyproject.toml` if the notary changed).
-2. Rename the CHANGELOG's `## [Unreleased]` heading to `## [X.Y.Z] — <date>`.
+1. Bump `lethe/version.py`.
+2. Rename the root `CHANGELOG.md`'s `## [Unreleased]` heading to
+   `## [X.Y.Z] — <date>`. That file is `lethe-delete`'s alone; the notary has
+   its own, and the two packages release on separate tags (below).
 3. Merge that to `main`.
 4. Tag the **merge commit** and push the tag:
 
@@ -106,21 +108,29 @@ take a version number because the other moved.
 
 ```bash
 # 1. bump notary/pyproject.toml  ->  version = "0.2.0"
-# 2. commit, merge to main
+# 2. rename notary/CHANGELOG.md's `## [Unreleased]` to `## [0.2.0] — <date>`
+# 3. commit, merge to main
 git tag notary-v0.2.0 && git push origin notary-v0.2.0
 ```
 
 `.github/workflows/release-notary.yml` does the rest, with the same guards the
 root workflow has: the tag must look like a release tag, the checkout must
 actually be sitting on that tag's commit, the tag must match
-`notary/pyproject.toml`, and the built artifacts must carry that version — all
-before anything reaches PyPI, because a version can never be re-uploaded.
+`notary/pyproject.toml`, there must be a `notary/CHANGELOG.md` section for that
+version, and the built artifacts must carry it — all before anything reaches
+PyPI, because a version can never be re-uploaded.
 
-**PyPI only — no GitHub Release.** The root workflow builds its notes from
-`CHANGELOG.md` so the release and the changelog cannot tell different stories,
-and that changelog is versioned to `lethe-delete`: there is no section that
-means the notary. Inventing one would be the exact drift that guard exists to
-prevent. The tag is the record until the notary has a changelog of its own.
+Step 2 is also checked on every commit, not just at tag time:
+`notary/tests/test_packaging.py` fails if `notary/pyproject.toml`'s version has
+no section in `notary/CHANGELOG.md`. The workflow's copy is the backstop, and
+it fires after the tag is already pushed — which is the wrong moment to find
+out.
+
+**PyPI only — no GitHub Release.** This repo's Releases page is
+`lethe-delete`'s `v*` line; two series interleaved on it read as one product's
+history with holes in it. `notary/CHANGELOG.md` is this package's record
+instead, linked from its PyPI page as the `Changelog` project URL — which is
+why the tag does not publish without a section in it.
 
 ### First publish: a *pending* publisher
 
