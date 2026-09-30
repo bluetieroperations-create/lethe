@@ -32,6 +32,27 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
   cannot tell different stories; it cannot tell that the story is about the
   wrong product.
 
+  Reaching that file from PyPI turned out to need two links rather than one,
+  and the difference is only visible by reading the published record instead of
+  the tree — `pypi.org/pypi/lethe-notary/{0.2.0,0.2.1}/json` carries no
+  `Changelog` URL, metadata is frozen at upload, and the sdist ships no
+  `CHANGELOG.md`. So a `Changelog` project URL covers releases from the next
+  one on, and a line in `notary/README.md` covers the two already out, because
+  their frozen `Documentation` URL points at that README on `main` and resolves
+  live. Both links are asserted; deleting the README one is the only failure
+  here that publishing again cannot repair.
+
+  Those links must be **absolute**, which is measured rather than assumed:
+  `readme_renderer` 46.0 — the library PyPI renders long descriptions with —
+  passes `](CHANGELOG.md)` through as `href="CHANGELOG.md"`, which on
+  `pypi.org/project/<name>/` resolves to a 404. Checking that is what caught
+  this change adding a *relative* link to the root README, one file away from
+  the guard it had just written for the notary's. It also turned up seven
+  pre-existing relative `docs/*.md` links in that README, which is
+  `lethe-delete`'s long description — so those have rendered broken on its PyPI
+  page for seven releases. Not fixed here, because they are not this change's;
+  recorded so the next person does not rediscover them.
+
   Worth recording how it got there: `release-notary.yml` was written with a
   comment saying this changelog "is versioned to lethe-delete — there is no
   `## [0.2.0]` section that means the notary. Inventing one here would be the

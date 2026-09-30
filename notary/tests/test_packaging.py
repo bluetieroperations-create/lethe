@@ -117,17 +117,24 @@ def test_the_changelog_is_reachable_from_the_pypi_page(project):
         project.get("urls")
 
 
-def test_the_already_published_versions_can_still_reach_the_changelog():
+def test_the_already_published_versions_can_still_reach_the_changelog(project):
     """What covers 0.2.0 and 0.2.1: their frozen `Documentation` URL points at
     this README on `main`, which resolves live. Deleting the line from the
     README takes the changelog away from every version already on PyPI — the
     one failure here that cannot be fixed by publishing again.
 
-    The URL must be absolute. This README is the long description, and PyPI
-    does not rewrite relative links: `](CHANGELOG.md)` renders broken on
-    exactly the page this line exists for.
+    The URL must be absolute, and this is measured rather than assumed:
+    rendering `](CHANGELOG.md)` through readme_renderer 46.0 — the library PyPI
+    itself renders long descriptions with — emits `href="CHANGELOG.md"`
+    unchanged. On `pypi.org/project/lethe-notary/` that resolves to
+    `pypi.org/project/lethe-notary/CHANGELOG.md`, a 404, on exactly the page
+    this line exists for.
+
+    Read from `project["readme"]` rather than a hardcoded name, so the guard
+    follows the file PyPI actually renders instead of relying on a neighbouring
+    test to keep the two in step.
     """
-    readme = (NOTARY / "README.md").read_text()
+    readme = (NOTARY / project["readme"]).read_text()
     assert CHANGELOG_URL in readme, (
         "notary/README.md must link the changelog by absolute URL; it is the "
         "only route to it from the versions already published on PyPI"

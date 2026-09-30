@@ -244,7 +244,7 @@ Pushing a `vX.Y.Z` tag publishes both the GitHub Release and the PyPI package
 from that one tag, with the notes taken from the CHANGELOG so the two cannot
 tell different stories. `lethe-notary` is a second distribution in this repo on
 its own version line: `notary-v*` tags publish it, and its changes are recorded
-in [notary/CHANGELOG.md](notary/CHANGELOG.md). See
+in [notary/CHANGELOG.md](https://github.com/bluetieroperations-create/lethe/blob/main/notary/CHANGELOG.md). See
 [docs/releasing.md](docs/releasing.md).
 
 ## License
