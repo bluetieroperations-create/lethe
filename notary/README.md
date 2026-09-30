@@ -3,6 +3,9 @@
 A paid countersigning witness for Lethe deletion certificates, billed per
 certificate over [x402](https://x402.org/).
 
+What changed in each release:
+[CHANGELOG.md](https://github.com/bluetieroperations-create/lethe/blob/main/notary/CHANGELOG.md).
+
 ## What it sells
 
 A Lethe certificate is self-attestation, and says so in its own claim text: the

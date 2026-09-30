@@ -6,11 +6,13 @@ name: Release notary
 # about lethe-delete. Tying them together would force one to take a version
 # number because the other moved.
 #
-# PyPI only, no GitHub Release. The root workflow builds its release notes from
-# CHANGELOG.md so the two can never tell different stories, and that changelog
-# is versioned to lethe-delete — there is no `## [0.2.0]` section that means
-# the notary. Inventing one here would be the exact drift that guard exists to
-# prevent, so the tag is the record until the notary has a changelog of its own.
+# PyPI only, no GitHub Release. This repo's Releases page is lethe-delete's
+# `v*` line; notary/CHANGELOG.md is this package's record, and a second series
+# of releases interleaved on one page reads as one product's history with gaps
+# in it. That changelog is checked below rather than merely assumed: a tag
+# whose version has no section in it does not publish, because a release nobody
+# can read the contents of is the same drift as a release that describes the
+# wrong contents.
 on:
   push:
     tags: ["notary-v*"]
@@ -85,6 +87,20 @@ jobs:
             echo "::error::tag $RELEASE_TAG does not match notary/pyproject.toml ($got)"
             exit 1
           fi
+
+      # The changelog is this package's only published record — there is no
+      # GitHub Release carrying notes. Publishing a version it does not
+      # describe means the artifact exists and nothing says what is in it, and
+      # a version number cannot be reused to fix that.
+      - name: The changelog must describe this version
+        run: |
+          want="${RELEASE_TAG#notary-v}"
+          if ! grep -qE "^## \[$want\]( |$)" notary/CHANGELOG.md; then
+            echo "::error::notary/CHANGELOG.md has no '## [$want]' section"
+            grep -E "^## " notary/CHANGELOG.md || true
+            exit 1
+          fi
+          echo "notary/CHANGELOG.md describes $want"
 
       - name: Build sdist and wheel
         run: |

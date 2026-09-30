@@ -78,6 +78,28 @@ read what they will actually receive — `twine check` warns about a missing
 description and passes the package anyway, and a published version's metadata
 can never be amended.
 
+For anything already published, that goes one step further: read the *published*
+record, and remember that a fix to it is not retroactive. Splitting the notary's
+changelog out came with the sentence "linked from its PyPI page as the
+`Changelog` project URL", written in the present tense about a URL that had just
+been added to `pyproject.toml`. Fetching
+`pypi.org/pypi/lethe-notary/{0.2.0,0.2.1}/json` showed `project_urls` holding
+only `Documentation` and `Repository`; metadata is frozen at upload, so those two
+versions can never gain the link, and the sdist carried no `CHANGELOG.md` either.
+The file the whole change existed to produce was reachable from a published
+release by no route at all, in a sentence asserting it was the only route. When a
+claim is about the outside world, enumerate every such claim in the diff and read
+each one — the second pass over this change repeated the same class on a
+neighbouring version, which is the signal to make the class exhaustive rather
+than to look harder.
+
+The renderer counts as outside world too. `readme_renderer` — what PyPI runs on a
+long description — passes relative hrefs through untouched, so `](docs/foo.md)`
+in a README that is someone's `readme =` resolves against
+`pypi.org/project/<name>/` and 404s. Links in a published README must be
+absolute. Checking this is what found that the same change had added a relative
+link to the *root* README one file away from the guard it wrote for the notary's.
+
 ### A number you quote must be the thing you name
 
 Both timing figures in this story were wrong: theirs by a factor of a thousand,
