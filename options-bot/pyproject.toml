@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optbot"
+version = "0.1.0"
+description = "Defined-risk options trading bot for Robinhood (paper by default)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+robinhood = ["robin_stocks>=3.0", "pyotp>=2.8"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+optbot = "optbot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["optbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

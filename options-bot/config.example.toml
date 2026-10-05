@@ -1,0 +1,18 @@
+# Copy to config.toml and edit. Any key left out uses the default in optbot/config.py.
+# Start in paper mode. Run at least a few weeks of paper trades before going live.
+
+mode = "paper"                 # "live" also requires `optbot run --live`
+universe = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMD", "META", "AMZN", "GOOGL"]
+paper_starting_cash = 10000
+
+# Aggressive-but-defined-risk profile
+risk_per_trade_pct = 0.04      # worst case of any one trade: 4% of equity
+max_total_risk_pct = 0.35      # worst case of everything open at once: 35%
+max_positions = 8
+daily_loss_limit_pct = 0.06    # stop opening trades for the day after -6%
+max_drawdown_pct = 0.20        # kill switch after -20% from the high-water mark
+
+# More conservative?  risk_per_trade_pct = 0.02, max_total_risk_pct = 0.20,
+#                     credit_short_delta = 0.20, min_credit_to_width = 0.20
+# More aggressive?    don't. Raising size raises the odds of a ruinous drawdown
+#                     much faster than it raises returns.
