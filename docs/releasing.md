@@ -30,6 +30,30 @@ tag disagrees with what the repo says it is.
    The explicit refspec is just being unambiguous about what is being pushed;
    it is not itself a guarantee the ref arrived.
 
+   **A Claude Code cloud session cannot do this step.** It can do everything
+   up to it — bump the version, finalise the changelog, open the PR and merge
+   it — but not push the tag, so it cannot cut a release on its own. Pushing
+   `refs/tags/v0.7.3` from one returned `HTTP 403` after four retries, and the
+   two API routes that would create the ref another way,
+   `POST /repos/{owner}/{repo}/git/refs` and `.../git/tags`, both answered
+   *"Write access to this GitHub API path is not permitted through this
+   proxy."* This is a credential scope, not an outage: the proxy reported
+   `recentRelayFailures: []`, branch pushes from the same session worked, and
+   the merge (`PUT /repos/{owner}/{repo}/pulls/{n}/merge`) was allowed. Retrying
+   does not fix it. The tag has to be pushed from a clone whose credential may
+   write tag refs.
+
+   Two things about that 403 are worth knowing before you debug one. The push
+   prints `Everything up-to-date` as its *last* line, after the error, so the
+   final and most reassuring thing on screen is the false part — the same
+   reason the two checks above exist. And there is a tempting way around it:
+   creating the GitHub Release through the API creates a tag as a side effect,
+   and the hand-run publish below would then carry it to PyPI. Don't. It yields
+   a lightweight tag where every other release here is annotated, it skips the
+   tag-vs-`version.py` gate that only the Release job holds, and deleting a ref
+   is blocked by the same policy that blocked creating one — so the mess would
+   be permanent. Hand the tag to someone who can push it instead.
+
 The workflow then checks that the tag matches `lethe/version.py`, extracts the
 notes from the CHANGELOG (failing if that section is missing, empty, or still
 marked unreleased), publishes the GitHub Release, and only then uploads to
