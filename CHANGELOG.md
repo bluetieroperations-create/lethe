@@ -13,7 +13,16 @@ This file is `lethe-delete`'s. The repository also publishes `lethe-notary`, a
 separate distribution on its own version line and its own `notary-v*` tags; its
 changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
 
-## [Unreleased]
+## [0.7.3] — 2026-10-06
+
+**The release that makes `lethe-delete`'s PyPI page correct.** `git diff
+v0.7.2..v0.7.3 -- lethe/` is empty — the library's code is unchanged — so what
+ships here is the long description and the docs around it. That is the point
+rather than a caveat: the description is the artifact that was broken. Every
+relative link on the project page 404'd, and because a long description is
+frozen into the uploaded artifact and the page renders only the latest release,
+no amount of fixing `main` could repair it. Only publishing a new version can,
+which is this one.
 
 ### Added
 
