@@ -17,8 +17,18 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
 
 ### Added
 
-- **The root README's links work on PyPI now, and cannot regress.** All seven
-  relative links in it are absolute: six `docs/*.md` occurrences
+- **The root README's links will work on the next PyPI release, and cannot
+  regress after that.** Not now: a long description is baked into the uploaded
+  artifact and a project page renders only the latest release, so
+  `pypi.org/project/lethe-delete/` keeps serving 0.7.2's broken copy until
+  0.7.3 goes out — verified by reading the live `info.description`, which still
+  carries all seven. This entry first claimed the present tense, which is the
+  class `docs/reviewing.md` had just been given ("the fix is not retroactive"),
+  broken in the change immediately after writing it. The sdist built from this
+  commit carries zero relative targets in its `PKG-INFO`, so the fix is real —
+  it is just not live yet.
+
+  All seven relative links are absolute: six `docs/*.md` occurrences
   (`threat-model.md` twice) and `](LICENSE)`. That file is `lethe-delete`'s
   long description, and `readme_renderer` emits a relative target verbatim, so
   each one resolved against `pypi.org/project/lethe-delete/` and 404'd. The
@@ -32,10 +42,14 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
   only the latest, so tags and GitHub Releases are both the wrong unit. The
   live page serves 0.7.2, whose README carries all seven. Before that it served
   0.2.0, whose README carried two of them (`docs/m2m.md` and `LICENSE`, the
-  only two present at every tag). So the page has shown broken links since July
-  and has shown all seven since 2026-09-08. Per-link tag coverage ranges from
-  1/8 (`docs/releasing.md`, added just before the last release) to 8/8 — it was
-  never the uniform "seven" the entry above first claimed.
+  only two present at every tag). Read from PyPI per version: 0.1.0 and 0.2.0
+  each published two relative targets, 0.7.2 publishes six distinct ones across
+  seven occurrences. So the page has been broken since the very first upload on
+  2026-07-06, and has shown all seven since 0.7.2 was **uploaded** on
+  2026-09-11 — not the 2026-09-08 this entry first gave, which was the tag
+  date; the page changes when the artifact is uploaded, not when a tag is cut.
+  Per-link tag coverage ranges from 1/8 (`docs/releasing.md`, added just before
+  the last release) to 8/8 — never the uniform "seven" first claimed.
 
   The guard that replaces remembering is one assertion with **no allowlist**,
   because fixing all seven leaves the inventory empty and an empty rule beats a
@@ -52,10 +66,21 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
   relative badge would have sat. Fenced and inline code are stripped first, so
   a README may still *show* a relative link as an example without tripping it.
 
-  Nine mutations: each of the seven link forms reverted or added back fails it
-  (including in `notary/README.md`, and including a renamed `readme =`), while
-  a relative link inside a code fence, a bare `#anchor`, and a `mailto:` all
-  correctly do not.
+  Nine file-level mutations: each of the seven link forms reverted or added
+  back fails it (including in `notary/README.md`, and including a renamed
+  `readme =`), while a relative link inside a code fence, a bare `#anchor`, and
+  a `mailto:` all correctly do not.
+
+  Those mutations were not enough, which is why there is also a table of 19
+  link forms asserting which must be caught and which must not. Probing the
+  patterns that way found one that renders, is relative, and was **not**
+  flagged: an unquoted HTML attribute, `<a href=docs/x.md>`. Valid HTML5, kept
+  by the sanitizer — measured, not assumed: `readme_renderer` turns
+  `<a href=docs/x.md>` into `href="docs/x.md" rel="nofollow"`, so the relative
+  target really does reach the page — and missed because the pattern demanded
+  quotes. Reading the regex had not found it; a table did. A second test keeps
+  both halves of that table populated, so it cannot drift to all-catch or
+  all-ignore and still pass.
 
 - **The notary has its own changelog**, [`notary/CHANGELOG.md`](notary/CHANGELOG.md),
   and the entries that belonged to it have moved there. This file's
