@@ -39,6 +39,9 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/bluetieroperations-create/lethe"
 Documentation = "https://github.com/bluetieroperations-create/lethe/blob/main/notary/README.md"
+# This package publishes no GitHub Release, so the changelog is the only place
+# a user can read what a version changed. It has to be reachable from the page.
+Changelog = "https://github.com/bluetieroperations-create/lethe/blob/main/notary/CHANGELOG.md"
 
 [project.optional-dependencies]
 # httpx, not httpx2: starlette's TestClient imports `httpx`, and the
