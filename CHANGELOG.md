@@ -17,6 +17,46 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
 
 ### Added
 
+- **The root README's links work on PyPI now, and cannot regress.** All seven
+  relative links in it are absolute: six `docs/*.md` occurrences
+  (`threat-model.md` twice) and `](LICENSE)`. That file is `lethe-delete`'s
+  long description, and `readme_renderer` emits a relative target verbatim, so
+  each one resolved against `pypi.org/project/lethe-delete/` and 404'd. The
+  display text is unchanged; only the targets moved, and the link count is the
+  same 20 before and after. Every rewritten target was confirmed to exist on
+  `main` before the rewrite, so none of these trade a 404 for a different 404.
+
+  How long they were broken is worth stating precisely, because the first
+  telling of it was wrong. `lethe-delete` has **eight** `v*` tags but only
+  **three** versions on PyPI — 0.1.0, 0.2.0, 0.7.2 — and a project page renders
+  only the latest, so tags and GitHub Releases are both the wrong unit. The
+  live page serves 0.7.2, whose README carries all seven. Before that it served
+  0.2.0, whose README carried two of them (`docs/m2m.md` and `LICENSE`, the
+  only two present at every tag). So the page has shown broken links since July
+  and has shown all seven since 2026-09-08. Per-link tag coverage ranges from
+  1/8 (`docs/releasing.md`, added just before the last release) to 8/8 — it was
+  never the uniform "seven" the entry above first claimed.
+
+  The guard that replaces remembering is one assertion with **no allowlist**,
+  because fixing all seven leaves the inventory empty and an empty rule beats a
+  rule with exceptions. It reads the file from each package's `project.readme`
+  rather than a hardcoded path, so renaming the readme moves the check with it
+  instead of leaving it pointed at a file nobody publishes — the same lesson as
+  `PaymentConfig` validating `from_env` and nothing else.
+
+  It covers the whole link surface, not the part in use today: inline links,
+  **images**, reference-style definitions and raw HTML `href`/`src`. Images
+  matter because the scan that found the original seven matched `href=` only,
+  and an image is `src=` — so it never looked at the one image in the file. It
+  happened to be an absolute CI badge, but the check had a hole where a
+  relative badge would have sat. Fenced and inline code are stripped first, so
+  a README may still *show* a relative link as an example without tripping it.
+
+  Nine mutations: each of the seven link forms reverted or added back fails it
+  (including in `notary/README.md`, and including a renamed `readme =`), while
+  a relative link inside a code fence, a bare `#anchor`, and a `mailto:` all
+  correctly do not.
+
 - **The notary has its own changelog**, [`notary/CHANGELOG.md`](notary/CHANGELOG.md),
   and the entries that belonged to it have moved there. This file's
   `[Unreleased]` had collected eight of them — mainnet auth, the catalog
@@ -48,10 +88,11 @@ changelog is [`notary/CHANGELOG.md`](notary/CHANGELOG.md).
   `pypi.org/project/<name>/` resolves to a 404. Checking that is what caught
   this change adding a *relative* link to the root README, one file away from
   the guard it had just written for the notary's. It also turned up seven
-  pre-existing relative `docs/*.md` links in that README, which is
-  `lethe-delete`'s long description — so those have rendered broken on its PyPI
-  page for seven releases. Not fixed here, because they are not this change's;
-  recorded so the next person does not rediscover them.
+  pre-existing relative links in that README, which is `lethe-delete`'s long
+  description. Fixed in the entry below, which also corrects two things this
+  entry originally got wrong about them: they are not all `docs/*.md` (six are,
+  with `threat-model.md` linked twice; the seventh is `](LICENSE)`), and "for
+  seven releases" was a count of GitHub Releases, which is not what renders.
 
   Worth recording how it got there: `release-notary.yml` was written with a
   comment saying this changelog "is versioned to lethe-delete — there is no

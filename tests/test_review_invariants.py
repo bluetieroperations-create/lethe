@@ -133,3 +133,61 @@ def test_ci_never_silences_a_guard_it_relies_on():
         + "\n\nIf the output is the diagnostic, capture it and print it on "
           "failure instead. See docs/reviewing.md."
     )
+
+
+# A file named by `project.readme` becomes the PyPI long description, and
+# readme_renderer (what PyPI renders with) passes relative hrefs through
+# untouched — measured on 46.0: `](docs/foo.md)` emits `href="docs/foo.md"`,
+# which resolves against `pypi.org/project/<name>/` and 404s. So a relative
+# link in one of these files is a broken link on a published page, and a
+# published page's metadata is frozen: the fix only reaches later releases.
+#
+# This is not hypothetical. The root README shipped six relative `docs/*.md`
+# links and a relative `LICENSE` link, broken on lethe-delete's page for seven
+# releases, found only when a change to the notary's README prompted someone
+# to actually render one. There is no allowlist here on purpose: the inventory
+# would be empty, and an empty rule is simpler than a rule with exceptions.
+_CODE_FENCE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE = re.compile(r"`[^`\n]+`")
+
+# Every way a target can be written, not only the inline form in use today.
+_LINK_TARGETS = (
+    re.compile(r"(?<!\\)\]\(\s*<?([^)\s>]+)"),        # [text](t) and ![alt](t)
+    re.compile(r"^\[[^\]]+\]:\s*<?([^\s>]+)", re.M),  # [ref]: t
+    re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)"""),  # raw HTML
+)
+
+# A bare fragment is fine; so is anything carrying a scheme a browser resolves
+# without a base. Everything else needs the repository URL spelled out.
+_ABSOLUTE = re.compile(r"^(?:https?://|mailto:|#)")
+
+
+def _long_description_files():
+    """(package name, path) for each file PyPI renders as a long description.
+
+    Read from `project.readme` rather than hardcoded, so the guard follows a
+    rename instead of silently checking a file nobody publishes.
+    """
+    import tomllib
+
+    for pyproject in (REPO / "pyproject.toml", REPO / "notary/pyproject.toml"):
+        project = tomllib.loads(pyproject.read_text())["project"]
+        declared = project.get("readme")
+        assert declared, f"{pyproject} declares no readme"
+        yield project["name"], pyproject.parent / declared
+
+
+def test_published_readmes_have_no_relative_links():
+    broken = []
+    for name, path in _long_description_files():
+        assert path.is_file(), f"{name} declares {path}, which does not exist"
+        prose = _INLINE_CODE.sub("", _CODE_FENCE.sub("", path.read_text()))
+        for pattern in _LINK_TARGETS:
+            for target in pattern.findall(prose):
+                if not _ABSOLUTE.match(target):
+                    broken.append(f"{name} ({path.relative_to(REPO)}): {target}")
+    assert not broken, (
+        "relative link(s) in a PyPI long description — these 404 on the "
+        "project page, and the page cannot be fixed after upload:\n  "
+        + "\n  ".join(broken)
+    )
