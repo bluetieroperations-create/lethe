@@ -126,7 +126,7 @@ The certificate carries the **evidence**, not just the boolean:
   index fingerprint.
 - **`key_id`** — which key epoch signed this, derived from the public key and
   re-checked at verification, so rotating keys never orphans old certificates.
-  See [docs/key-rotation.md](docs/key-rotation.md).
+  See [docs/key-rotation.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/key-rotation.md).
 - **`audit_head`** — the audit-chain position this deletion run started from, so
   the certificate and the tamper-evident log point at each other.
 - **`reverifiable`** — whether the issuer retained what a later re-query needs
@@ -137,7 +137,7 @@ The certificate carries the **evidence**, not just the boolean:
 
 Older `lethe.cert/1` and `lethe.cert/2` certificates still verify.
 
-**Read [docs/threat-model.md](docs/threat-model.md) before relying on a
+**Read [docs/threat-model.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/threat-model.md) before relying on a
 certificate.** It sets out who you must trust and what stays true when they are
 dishonest — in particular that Lethe is self-attestation, so a certificate
 proves far more against a third party than against the operator who issued it.
@@ -189,7 +189,7 @@ and verify certificates machine-to-machine:
 Destructive deletes are two-step (preview → confirm token → forget), and any
 agent can verify a certificate with zero infrastructure (you still need the
 operator's published public key to pin against). Full guide:
-[docs/m2m.md](docs/m2m.md).
+[docs/m2m.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/m2m.md).
 
 ## Security model & honest limits
 
@@ -223,8 +223,8 @@ operator's published public key to pin against). Full guide:
 - **Self-attestation, unless you anchor.** The operator signs their own
   certificate and `issued_at` is their own clock. `lethe anchor` timestamps the
   audit head with an external RFC 3161 authority, which closes backdating; see
-  [docs/anchoring.md](docs/anchoring.md) for what it does and does not prove,
-  and [docs/threat-model.md](docs/threat-model.md) for the wider picture.
+  [docs/anchoring.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/anchoring.md) for what it does and does not prove,
+  and [docs/threat-model.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/threat-model.md) for the wider picture.
 - **Not erasure from backups or model weights.** Out of scope by design; the
   certificate says so.
 
@@ -245,8 +245,8 @@ from that one tag, with the notes taken from the CHANGELOG so the two cannot
 tell different stories. `lethe-notary` is a second distribution in this repo on
 its own version line: `notary-v*` tags publish it, and its changes are recorded
 in [notary/CHANGELOG.md](https://github.com/bluetieroperations-create/lethe/blob/main/notary/CHANGELOG.md). See
-[docs/releasing.md](docs/releasing.md).
+[docs/releasing.md](https://github.com/bluetieroperations-create/lethe/blob/main/docs/releasing.md).
 
 ## License
 
-[Apache-2.0](LICENSE) — permissive, with an explicit patent grant.
+[Apache-2.0](https://github.com/bluetieroperations-create/lethe/blob/main/LICENSE) — permissive, with an explicit patent grant.
