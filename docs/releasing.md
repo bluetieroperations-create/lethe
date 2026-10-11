@@ -64,10 +64,10 @@ tag disagrees with what the repo says it is.
    reason the two checks above exist. And there is a tempting way around it:
    creating the GitHub Release through the API creates a tag as a side effect,
    and the hand-run publish below would then carry it to PyPI. Don't. It yields
-   a lightweight tag where every other release here is annotated, it skips the
-   tag-vs-`version.py` gate that only the Release job holds, and deleting a ref
-   is blocked by the same policy that blocked creating one — so the mess would
-   be permanent. Hand the tag to someone who can push it instead.
+   a lightweight tag where every `v*` release since v0.3.0 is annotated, it
+   skips the tag-vs-`version.py` gate that only the Release job holds, and
+   deleting a ref is blocked by the same policy that blocked creating one — so
+   the mess would be permanent. Hand the tag to someone who can push it instead.
 
 The workflow then checks that the tag matches `lethe/version.py`, extracts the
 notes from the CHANGELOG (failing if that section is missing, empty, or still
@@ -150,7 +150,24 @@ take a version number because the other moved.
 # 2. rename notary/CHANGELOG.md's `## [Unreleased]` to `## [0.2.0] — <date>`
 # 3. commit, merge to main
 git tag notary-v0.2.0 && git push origin notary-v0.2.0
+
+# Must print ONE line, whose SHA is the commit you tagged. One, not two:
+# that is not a typo for the `v*` check above — see below.
+git ls-remote origin refs/tags/notary-v0.2.0 'refs/tags/notary-v0.2.0^{}'
 ```
+
+**One line here, two for `v*`.** The same two silent tag-push failures apply
+to a `notary-v*` push, so it needs the same proof that the ref arrived; a
+version that is tagged but never pushed publishes nothing, and the number is
+spent either way. The expected output differs because the tags do. The
+notary's are lightweight — `git tag`, no `-a` — and a lightweight tag has no
+peeled `^{}` ref, so a correct push prints one line; `notary-v0.2.0` and
+`notary-v0.2.1` both do. That single line's SHA is the commit itself rather
+than a tag object, so one line proves arrival and target together. Copying
+the two-line expectation down from the `v*` section would therefore call
+every correct notary release a failure — the same bug that section carried
+until v0.7.3 ran into it, pointed the other way. Should the notary ever move
+to annotated tags, this becomes two.
 
 `.github/workflows/release-notary.yml` does the rest, with the same guards the
 root workflow has: the tag must look like a release tag, the checkout must
