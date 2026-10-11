@@ -35,8 +35,12 @@ jobs:
       # handles money. It was linted and typechecked by hand for three
       # releases, which is another way of saying nobody was checking: three
       # "ruff clean" claims went unchallenged because no job disagreed.
+      # examples/ for the same reason, one directory over: it sat outside this
+      # list, so `ruff check .` and CI quietly disagreed about whether the repo
+      # was clean. Demo code is not shipped, but it is the first thing a reader
+      # copies, and nothing here is cheap enough to leave unchecked.
       - name: Ruff
-        run: python -m ruff check lethe tests notary
+        run: python -m ruff check lethe tests notary examples
       - name: Mypy
         # notary/tools too: pay.py is the documented acceptance path for the
         # idempotency guarantee, so it runs on customers' machines against real
