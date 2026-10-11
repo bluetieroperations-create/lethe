@@ -15,9 +15,11 @@ tag disagrees with what the repo says it is.
 
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z" <merge-commit-sha>
-   git tag --list vX.Y.Z                                    # must print the tag
+   git tag --list vX.Y.Z                     # must print the tag
    git push origin refs/tags/vX.Y.Z:refs/tags/vX.Y.Z
-   git ls-remote --tags origin vX.Y.Z                       # must print two lines
+
+   # Must print TWO lines, the second being the merge commit:
+   git ls-remote origin refs/tags/vX.Y.Z 'refs/tags/vX.Y.Z^{}'
    ```
 
    **Check both times.** A tag push can fail in two quiet ways, and v0.7.1 hit
@@ -29,6 +31,19 @@ tag disagrees with what the repo says it is.
    the local `git tag --list` and the remote `git ls-remote` are what tell you.
    The explicit refspec is just being unambiguous about what is being pushed;
    it is not itself a guarantee the ref arrived.
+
+   **Name both refs explicitly in that last check.** The obvious form,
+   `git ls-remote --tags origin vX.Y.Z`, is the wrong one: an exact pattern
+   does not match the peeled ref `refs/tags/vX.Y.Z^{}`, so a perfectly good
+   annotated tag prints one line where this file used to claim two. That is
+   how v0.7.3's successful push came to be read as a failure. Widening the
+   pattern to `vX.Y.Z*` is worse rather than better — it also matches
+   `vX.Y.Z0`, so the same check prints four lines once the repo reaches
+   v0.7.30. Naming the two refs is exact at both ends. Two lines then say
+   three separate things: the tag ref arrived, it is annotated rather than
+   lightweight (a lightweight tag has no peeled ref and prints one line), and
+   the second line is the commit it points at — which should be the merge
+   commit you tagged.
 
    **A Claude Code cloud session cannot do this step.** It can do everything
    up to it — bump the version, finalise the changelog, open the PR and merge
