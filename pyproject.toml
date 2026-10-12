@@ -58,6 +58,12 @@ build-backend = "setuptools.build_meta"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# The demo scripts import their siblings (`candidates`, `setup`) by bare name,
+# because that is how they are run: `python setup.py` from inside the folder.
+# Ruff infers first-party packages from these roots, and without the second one
+# it files those two as third-party and wants them grouped with psycopg —
+# sorting them next to a PyPI dependency they have nothing to do with.
+src = [".", "examples/recruiting-demo"]
 
 [tool.ruff.lint]
 # A focused set: correctness (E/F), import order (I), modern syntax (UP),
