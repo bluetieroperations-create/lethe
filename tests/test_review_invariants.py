@@ -181,6 +181,37 @@ def _long_description_files():
         yield project["name"], pyproject.parent / declared
 
 
+def _declared_projects():
+    """(path, `[project]` table) for every distribution this repo publishes."""
+    import tomllib
+
+    for pyproject in (REPO / "pyproject.toml", REPO / "notary/pyproject.toml"):
+        yield pyproject, tomllib.loads(pyproject.read_text())["project"]
+
+
+def test_every_distribution_declares_its_license_the_way_installers_read_it():
+    """PEP 639: an SPDX expression in `license`, not a `License ::` classifier.
+
+    The notary had this guard and the root distribution — the one with users —
+    did not, so only half the repo was watched. Both are checked here because
+    the mechanism is repo-wide: the classifier form is deprecated, setuptools
+    warns on every build, and `License-Expression` is what actually lands in
+    the metadata. A published distribution's metadata can never be amended,
+    so the moment to catch a wrong license declaration is before the upload.
+    """
+    for pyproject, project in _declared_projects():
+        where = pyproject.relative_to(REPO)
+        assert project.get("license") == "Apache-2.0", (
+            f"{where} declares license={project.get('license')!r}; "
+            "expected the SPDX expression 'Apache-2.0'"
+        )
+        deprecated = [c for c in project.get("classifiers", []) if c.startswith("License ::")]
+        assert not deprecated, (
+            f"{where} still carries {deprecated}. The SPDX `license` field replaces it; "
+            "keeping both is how they drift apart."
+        )
+
+
 def test_published_readmes_have_no_relative_links():
     broken = []
     for name, path in _long_description_files():

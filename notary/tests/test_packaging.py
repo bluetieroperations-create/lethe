@@ -36,8 +36,16 @@ def test_the_pypi_page_will_not_be_blank(project):
 
 
 def test_the_license_is_declared_where_installers_look(project):
-    classifiers = project.get("classifiers", [])
-    assert any(c.startswith("License ::") for c in classifiers), classifiers
+    """PEP 639 moved this: the SPDX expression in `license`, not a
+    `License ::` classifier. The classifier is deprecated and setuptools warns
+    on every build; what reaches the distribution now is `License-Expression`.
+    Asserting the new form and refusing the old one, rather than accepting
+    either, is deliberate — carrying both is how the two drift apart, and a
+    published version's metadata can never be amended.
+    """
+    assert project.get("license") == "Apache-2.0", project.get("license")
+    deprecated = [c for c in project.get("classifiers", []) if c.startswith("License ::")]
+    assert not deprecated, deprecated
 
 
 def test_the_license_text_ships_inside_the_distribution():
