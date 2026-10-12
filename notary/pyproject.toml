@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 for PEP 639 (`license` as an SPDX expression, `license-files`).
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,8 +13,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["x402", "gdpr", "ccpa", "deletion", "attestation", "notary",
             "audit", "compliance", "micropayments", "agent-payments"]
+# PEP 639: an SPDX expression, not the deprecated `License ::` classifier,
+# which setuptools now warns about on every build. The classifier carried the
+# same fact in a format that is on its way out; this is the replacement, and
+# `license-files` keeps LICENSE in both the sdist and the wheel rather than
+# relying on setuptools' default glob.
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
