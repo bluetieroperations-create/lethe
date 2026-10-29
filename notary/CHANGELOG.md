@@ -15,7 +15,13 @@ contain.
 The notary countersigns certificates; it does not define them. Certificate
 schema versions (`lethe.cert/N`) are `lethe-delete`'s and are recorded there.
 
-## [Unreleased]
+## [0.2.2] — 2026-10-29
+
+**A metadata release.** `git diff
+notary-v0.2.1..notary-v0.2.2 -- notary/lethe_notary/` is empty: the service's
+code is unchanged. What ships is the long description, the project URLs and
+the license declaration — metadata PyPI freezes at upload, which is why
+publishing a version is the only way to change it.
 
 ### Added
 
@@ -43,6 +49,30 @@ schema versions (`lethe.cert/N`) are `lethe-delete`'s and are recorded there.
   renders broken on the one page it exists for. Both links are asserted; the
   README one is the load-bearing half today, and deleting it is the only
   failure here that publishing again cannot repair.
+
+### Changed
+
+- **The license is declared as an SPDX expression**, `license = "Apache-2.0"`
+  plus `license-files = ["LICENSE"]`, replacing the
+  `License :: OSI Approved :: Apache Software License` classifier that
+  setuptools warns about wherever it is still used. The classifier stated the
+  same fact in a format on its way out; this is PEP 639's replacement. It needs
+  `setuptools>=77`, so the build-system pin moved with it, and nothing here
+  disables build isolation, so a build fetches that itself.
+
+  This appears under 0.2.2 rather than under the commit that made the change
+  because none of it reaches anyone until an artifact carries it, and the commit
+  that made it added no changelog entry at all. Read from the published record
+  rather than the tree: `pypi.org/pypi/lethe-notary/0.2.1/json` reports
+  `license_expression: null` and still lists the deprecated classifier. Metadata
+  is frozen at upload, so 0.2.0 and 0.2.1 keep the old form permanently.
+
+  Measured on the artifacts this tree builds rather than on the config: both
+  the sdist and the wheel carry `Metadata-Version: 2.4`,
+  `License-Expression: Apache-2.0` and `License-File: LICENSE`, no
+  `License ::` classifier, and the LICENSE text itself — in
+  `dist-info/licenses/` in the wheel and at the root of the sdist. Neither
+  build emits a deprecation warning, and `twine check` passes both.
 
 ## [0.2.1] — 2026-09-27
 

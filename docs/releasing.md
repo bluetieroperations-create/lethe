@@ -191,8 +191,8 @@ does not publish without a section in it.
 Reaching that record from PyPI takes two links, because one of them cannot
 work retroactively. The `Changelog` project URL is set in
 `notary/pyproject.toml`, but **a PyPI page's metadata is frozen at upload**:
-0.2.0 and 0.2.1 are published without it and can never gain it, so that link
-starts at the next release. What covers the versions already out there is the
+0.2.0 and 0.2.1 are published without it and can never gain it, so
+0.2.2 is the first release that carries it. What covers the versions already out there is the
 line at the top of `notary/README.md`, because their `Documentation` URL
 points at that README on `main` and resolves live. Both are asserted by
 `notary/tests/test_packaging.py`; the README one is the load-bearing half
